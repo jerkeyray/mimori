@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package kv;
+option go_package = "github.com/jerkeyray/mimori/internal/api/kv;kv";
+
+// The main Key-Value service definition.
+service KV {
+  rpc Put (PutRequest) returns (PutResponse);
+  rpc Get (GetRequest) returns (GetResponse);
+  rpc Delete (DeleteRequest) returns (DeleteResponse);
+  rpc Health (HealthRequest) returns (HealthResponse);
+}
+
+// Messages
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+message PutResponse {
+  bool ok = 1;
+}
+
+message GetRequest {
+  bytes key = 1;
+}
+
+message GetResponse {
+  bytes value = 1;
+  bool found = 2;
+}
+
+message DeleteRequest {
+  bytes key = 1;
+}
+
+message DeleteResponse {
+  bool deleted = 1;
+}
+
+message HealthRequest {}
+message HealthResponse {
+  string status = 1;
+}
