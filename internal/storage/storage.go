@@ -4,6 +4,14 @@ import (
 	"github.com/cockroachdb/pebble"
 )
 
+// interface implemented by PebbleKV used by gRPC
+type KV interface {
+	Put(key, value []byte) error
+	Get(key []byte) ([]byte, bool, error)
+	Delete(key []byte) error
+	Close() error
+}
+
 // PebbleKV is a wrapper aroung the actual Pebble db
 type PebbleKV struct {
 	db *pebble.DB

@@ -410,7 +410,7 @@ const file_kv_proto_rawDesc = "" +
 	"\x03Put\x12\x0e.kv.PutRequest\x1a\x0f.kv.PutResponse\x12&\n" +
 	"\x03Get\x12\x0e.kv.GetRequest\x1a\x0f.kv.GetResponse\x12/\n" +
 	"\x06Delete\x12\x11.kv.DeleteRequest\x1a\x12.kv.DeleteResponse\x12/\n" +
-	"\x06Health\x12\x11.kv.HealthRequest\x1a\x12.kv.HealthResponseB0Z.github.com/jerkeyray/mimori/internal/api/kv;kvb\x06proto3"
+	"\x06Health\x12\x11.kv.HealthRequest\x1a\x12.kv.HealthResponseB\x14Z\x12internal/api/kv;kvb\x06proto3"
 
 var (
 	file_kv_proto_rawDescOnce sync.Once

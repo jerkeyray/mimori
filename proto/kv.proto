@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package kv;
-option go_package = "github.com/jerkeyray/mimori/internal/api/kv;kv";
+option go_package = "internal/api/kv;kv";
 
 // The main Key-Value service definition.
 service KV {
