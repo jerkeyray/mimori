@@ -1,0 +1,10 @@
+# Pebble data directories
+data/
+data1/
+data2/
+data3/
+*.sst
+*.log
+MANIFEST-*
+OPTIONS-*
+CURRENT

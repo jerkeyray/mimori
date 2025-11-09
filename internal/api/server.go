@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
 
@@ -68,11 +71,14 @@ func ListenAndServe(addr string, store storage.KV) error {
 
 	// HTTP health endpoint
 	go func() {
+		httpPort := parsePort(addr) + 1
+		httpAddr := fmt.Sprintf(":%d", httpPort)
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 		})
-		_ = http.ListenAndServe(addr, nil)
+		log.Printf("[http] health endpoint at %s", httpAddr)
+		_ = http.ListenAndServe(httpAddr, nil)
 	}()
 
 	grpcServer := grpc.NewServer()
@@ -81,3 +87,20 @@ func ListenAndServe(addr string, store storage.KV) error {
 	fmt.Printf("Mimori node listening on %s\n", addr)
 	return grpcServer.Serve(lis)
 }
+
+// parsePort takes an address like ":4000" or "127.0.0.1:4000" and returns the numeric port.
+// if parsing fails, it just returns 0 so the caller can handle it gracefully.
+func parsePort(addr string) int {
+	// split on colon, take the last part (the port)
+	parts := strings.Split(addr, ":")
+	if len(parts) == 0 {
+		return 0
+	}
+	portStr := parts[len(parts)-1]
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
