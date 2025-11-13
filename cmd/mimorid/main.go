@@ -31,7 +31,7 @@ func main() {
 	defer clusterMgr.Stop()
 
 
-	if err := api.ListenAndServe(addr, store); err != nil {
+	if err := api.ListenAndServe(addr, store, raftNode); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }

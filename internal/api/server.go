@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jerkeyray/mimori/internal/api/kv"
-	"github.com/jerkeyray/mimori/internal/cluster"
+	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 	"github.com/jerkeyray/mimori/internal/storage"
 )
 
@@ -57,19 +57,15 @@ func (s *Server) Health(ctx context.Context, _ *kv.HealthRequest) (*kv.HealthRes
 }
 
 // server launcher
-func ListenAndServe(addr string, store storage.KV) error {
-	// start the cluster heartbeat routine
-	peers := []string{":4000", ":4001", ":4002"} // temporary static config
-	cluster := cluster.New(addr, peers)
-	cluster.Start()
-	defer cluster.Stop()
-
+func ListenAndServe(addr string, store storage.KV, raftNode raftpb.RaftServer) error {
+	// listen on the main gRPC address
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 
 	// HTTP health endpoint
+	// if node listens on :4000, HTTP health runs on :4001
 	go func() {
 		httpPort := parsePort(addr) + 1
 		httpAddr := fmt.Sprintf(":%d", httpPort)
@@ -81,15 +77,20 @@ func ListenAndServe(addr string, store storage.KV) error {
 		_ = http.ListenAndServe(httpAddr, nil)
 	}()
 
+	// create gRPC server
 	grpcServer := grpc.NewServer()
-	// route calls to KV service to this implementation
+
+	// register KV service
 	kv.RegisterKVServer(grpcServer, NewServer(store))
+
+	// register raft RPC service
+	raftpb.RegisterRaftServer(grpcServer, raftNode)
+
 	fmt.Printf("Mimori node listening on %s\n", addr)
 	return grpcServer.Serve(lis)
 }
 
-// parsePort takes an address like ":4000" or "127.0.0.1:4000" and returns the numeric port.
-// if parsing fails, it just returns 0 so the caller can handle it gracefully.
+// extracts port from string and returns the number
 func parsePort(addr string) int {
 	// split on colon, take the last part (the port)
 	parts := strings.Split(addr, ":")
