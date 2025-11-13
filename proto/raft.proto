@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package raft;
+
+option go_package = "internal/raft/raftpb;raftpb";
+
+message RequestVoteRequest {
+    string candidate_id = 1;
+    int32 term = 2;
+}
+
+message RequestVoteResponse {
+    int32 term = 1;
+    bool vote_granted = 2;
+}
+
+message AppendEntriesRequest {
+    int32 term = 1;
+    string leader_id = 2;
+}
+
+message AppendEntriesResponse {
+    int32 term = 1;
+    bool success = 2;
+}
+
+service Raft {
+    rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+}
