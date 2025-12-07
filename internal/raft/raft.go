@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"errors"
 	"log"
 	"math/rand"
 	"sync"
@@ -13,7 +14,7 @@ import (
 type RaftState int
 
 const (
-	Follower RaftState  = iota
+	Follower RaftState = iota
 	Candidate
 	Leader
 )
@@ -23,29 +24,45 @@ type NodeID string
 
 // Raft holds the consensus state for a mimori node
 type Raft struct {
-	raftpb.UnimplementedRaftServer  // REQUIRED for gRPC server interface
-	mu sync.Mutex
+	raftpb.UnimplementedRaftServer // REQUIRED for gRPC server interface
+	mu                             sync.Mutex
 
-	id NodeID // our address, e.g. ":4000"
+	id    NodeID   // our address, e.g. ":4000"
 	peers []NodeID // other nodes
-	state RaftState // follower, candidate, leader
-	term int // current term
-	votes int
+
+	state    RaftState // follower, candidate, leader
+	term     int       // current term
+	votes    int
 	votedFor NodeID // who we voted for
 
 	// timers
 	electionReset time.Time
+
+	log         []LogEntry
+	commitIndex int
+	lastApplied int
+
+	// for leaders: per follower progress
+	nextIndex  map[NodeID]int
+	matchIndex map[NodeID]int
+
+	// channel to delvier commited entries to the state machine
+	applyCh chan LogEntry
 }
 
 // create a new Raft instance and start election timer in the background
 func New(id NodeID, peers []NodeID) *Raft {
-	r := &Raft {
-		id: id, 
-		peers: peers,
-		state: Follower,
-		term: 0,
-		votedFor: "",
+	r := &Raft{
+		id:            id,
+		peers:         peers,
+		state:         Follower,
+		term:          0,
+		votedFor:      "",
 		electionReset: time.Now(),
+		log:           make([]LogEntry, 1),
+		nextIndex:     make(map[NodeID]int),
+		matchIndex:    make(map[NodeID]int),
+		applyCh:       make(chan LogEntry, 128),
 	}
 	go r.runElectionTimer()
 	return r
@@ -64,18 +81,18 @@ func (r *Raft) runElectionTimer() {
 	ticker := time.NewTicker(50 * time.Millisecond)
 
 	for {
-		<- ticker.C
+		<-ticker.C
 
 		r.mu.Lock()
 		if r.state == Leader {
-			// leaders don't time out 
+			// leaders don't time out
 			r.mu.Unlock()
 			continue
 		}
 
 		// time since last heartbeat or vote
 		if time.Since(r.electionReset) >= timeout {
-			// become candidate 
+			// become candidate
 			r.startElectionLocked()
 			timeout = r.randomElectionTimeout()
 		}
@@ -93,54 +110,116 @@ func (r *Raft) startElectionLocked() {
 
 	go r.broadcastRequestVote(r.term)
 
-	
 	log.Printf("[raft] %s starting election for term %d", r.id, r.term)
 }
 
 func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
-    r.mu.Lock()
-    defer r.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-		// if someone else has a higher term, revert to follower
-    if int(resp.Term) > r.term {
-        r.term = int(resp.Term)
-        r.state = Follower
-        r.votedFor = ""
-        return
-    }
+	// if someone else has a higher term, revert to follower
+	if int(resp.Term) > r.term {
+		r.term = int(resp.Term)
+		r.state = Follower
+		r.votedFor = ""
+		return
+	}
 
-    if r.state != Candidate {
-        return
-    }
+	if r.state != Candidate {
+		return
+	}
 
-		// if majority votes received, become leader
-    if resp.VoteGranted {
-        r.votes++
-        if r.votes > len(r.peers)/2 {
-            r.becomeLeaderLocked()
-        }
-    }
+	// if majority votes received, become leader
+	if resp.VoteGranted {
+		r.votes++
+		if r.votes > len(r.peers)/2 {
+			r.becomeLeaderLocked()
+		}
+	}
 }
 
 func (r *Raft) becomeLeaderLocked() {
-    r.state = Leader
-    log.Printf("[raft] %s became leader for term %d", r.id, r.term)
+	r.state = Leader
+	log.Printf("[raft] %s became leader for term %d", r.id, r.term)
 
-		// become leader and start pulsing heartbeats every 75 ms
-    go func() {
-        ticker := time.NewTicker(75 * time.Millisecond)
-        defer ticker.Stop()
+	// become leader and start pulsing heartbeats every 75 ms
+	go func() {
+		ticker := time.NewTicker(75 * time.Millisecond)
+		defer ticker.Stop()
 
-        for {
-            r.mu.Lock()
-            if r.state != Leader {
-                r.mu.Unlock()
-                return
-            }
-            r.mu.Unlock()
+		for {
+			r.mu.Lock()
+			if r.state != Leader {
+				r.mu.Unlock()
+				return
+			}
+			r.mu.Unlock()
 
-            r.sendHeartbeats()
-            <-ticker.C
-        }
-    }()
+			r.sendHeartbeats()
+			<-ticker.C
+		}
+	}()
+}
+
+func (r *Raft) IsLeader() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == Leader
+}
+
+func (r *Raft) LeaderID() NodeID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.state == Leader {
+		return r.id
+	}
+
+	return r.votedFor
+}
+
+func (r *Raft) ApplyCh() <-chan LogEntry {
+	return r.applyCh
+}
+
+// push the commited log entries to the DB node
+func (r *Raft) runApplier() {
+	for {
+		r.mu.Lock()
+		for r.commitIndex > r.lastApplied {
+			r.lastApplied++
+			entry := r.log[r.lastApplied]
+			r.mu.Unlock()
+
+			// deliver to state machine
+			r.applyCh <- entry
+
+			r.mu.Lock()
+		}
+		r.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+var ErrNotLeader = errors.New("not leader")
+
+func (r *Raft) Propose(cmdData []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.state != Leader {
+		return 0, ErrNotLeader
+	}
+
+	index := len(r.log)
+	entry := LogEntry{
+		Index: index,
+		Term:  r.term,
+		Data:  cmdData,
+	}
+	r.log = append(r.log, entry)
+
+	r.commitIndex = index
+
+	return index, nil
 }

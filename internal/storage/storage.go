@@ -29,7 +29,7 @@ func Open(path string) (*PebbleKV, error) {
 
 // put writes the kv pair to disk
 // pebble.Sync ensures the data actually gets saved to the disk, not memory buffers
-func (p *PebbleKV) Put (key, value []byte) error {
+func (p *PebbleKV) Put(key, value []byte) error {
 	return p.db.Set(key, value, pebble.Sync)
 }
 
@@ -60,6 +60,3 @@ func (p *PebbleKV) Delete(key []byte) error {
 func (p *PebbleKV) Close() error {
 	return p.db.Close()
 }
-
-
-

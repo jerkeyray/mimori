@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"strings"
@@ -11,31 +12,62 @@ import (
 	"github.com/jerkeyray/mimori/internal/storage"
 )
 
+// this is the bootloader for each node in mimori
+// the primariy job is initialize all the isolated components
+// and wire them all together (dependency injection)
+
 func main() {
 	addr := env("MIMORI_ADDR", ":4000")
 	dataDir := env("MIMORI_DATA", "data")
 
 	peerList := splitPeers(env("MIMORI_PEERS", ""))
 
+	// initialize kv engine
 	store, err := storage.Open(dataDir)
 	if err != nil {
 		log.Fatalf("failed to open storage: %v", err)
 	}
 	defer store.Close()
 
+	// give the network addr as the unique raft node id and give its peerList
 	raftNode := raft.New(raft.NodeID(addr), convertPeersToNodeIDs(peerList))
-	_ = raftNode // save it later when we integrate RPC
+
+	// state machine apply loop
+	go func() {
+		for entry := range raftNode.ApplyCh() {
+			var cmd raft.Command
+			if err := json.Unmarshal(entry.Data, &cmd); err != nil {
+				log.Printf("failed to decode raft command: %v", err)
+				continue
+			}
+
+			switch cmd.Op {
+			case raft.CmdPut:
+				if err := store.Put(cmd.Key, cmd.Value); err != nil {
+					log.Printf("apply PUT failed: %v", err)
+				}
+			case raft.CmdDelete:
+				if err := store.Delete(cmd.Key); err != nil {
+					log.Printf("apply DELETE failed: %v", err)
+				}
+			default:
+				log.Printf("unkown command op: %v", cmd.Op)
+			}
+		}
+	}()
 
 	clusterMgr := cluster.New(addr, peerList)
 	clusterMgr.Start()
 	defer clusterMgr.Stop()
 
-
+	// start the gRPC server and wait for connection calls
+	// pass the initialized store and raft node into the API layer
 	if err := api.ListenAndServe(addr, store, raftNode); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
 
+// read env or fall back to default
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v

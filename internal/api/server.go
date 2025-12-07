@@ -11,28 +11,42 @@ import (
 
 	"google.golang.org/grpc"
 
+	"encoding/json"
+
 	"github.com/jerkeyray/mimori/internal/api/kv"
+	"github.com/jerkeyray/mimori/internal/raft"
 	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 	"github.com/jerkeyray/mimori/internal/storage"
 )
+
+// this file defines how our server responds to client commands(mimorictl)
 
 // gRPC service implementation
 type Server struct {
 	kv.UnimplementedKVServer
 	store storage.KV // pebble wrapper
+	raft  *raft.Raft
 }
 
-func NewServer(store storage.KV) *Server {
-	return &Server{store: store}
+func NewServer(store storage.KV, r *raft.Raft) *Server {
+	return &Server{store: store, raft: r}
 }
 
 // gRPC method implementations
 
 func (s *Server) Put(ctx context.Context, req *kv.PutRequest) (*kv.PutResponse, error) {
-	err := s.store.Put(req.Key, req.Value)
-	if err != nil {
-		return &kv.PutResponse{Ok: false}, err
+	if !s.raft.IsLeader() {
+		// TODO: encode leader redirect error later
+		return nil, fmt.Errorf("not leader")
 	}
+
+	data := encodePutCmd(req.Key, req.Value)
+
+	_, err := s.raft.Propose(data)
+	if err != nil {
+		return nil, err
+	}
+
 	return &kv.PutResponse{Ok: true}, nil
 }
 
@@ -45,10 +59,17 @@ func (s *Server) Get(ctx context.Context, req *kv.GetRequest) (*kv.GetResponse, 
 }
 
 func (s *Server) Delete(ctx context.Context, req *kv.DeleteRequest) (*kv.DeleteResponse, error) {
-	err := s.store.Delete(req.Key)
+	if !s.raft.IsLeader() {
+		return nil, fmt.Errorf("not leader")
+	}
+
+	data := encodeDeleteCmd(req.Key)
+
+	_, err := s.raft.Propose(data)
 	if err != nil {
 		return nil, err
 	}
+
 	return &kv.DeleteResponse{Deleted: true}, nil
 }
 
@@ -57,7 +78,7 @@ func (s *Server) Health(ctx context.Context, _ *kv.HealthRequest) (*kv.HealthRes
 }
 
 // server launcher
-func ListenAndServe(addr string, store storage.KV, raftNode raftpb.RaftServer) error {
+func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 	// listen on the main gRPC address
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -81,7 +102,7 @@ func ListenAndServe(addr string, store storage.KV, raftNode raftpb.RaftServer) e
 	grpcServer := grpc.NewServer()
 
 	// register KV service
-	kv.RegisterKVServer(grpcServer, NewServer(store))
+	kv.RegisterKVServer(grpcServer, NewServer(store, raftNode))
 
 	// register raft RPC service
 	raftpb.RegisterRaftServer(grpcServer, raftNode)
@@ -105,3 +126,20 @@ func parsePort(addr string) int {
 	return port
 }
 
+type raftCommand struct {
+	Op    raft.CommandType `json:"op"`
+	Key   []byte           `json:"key"`
+	Value []byte           `json:"value,omitempty"`
+}
+
+func encodePutCmd(key, val []byte) []byte {
+	cmd := raftCommand{Op: raft.CmdPut, Key: key, Value: val}
+	b, _ := json.Marshal(cmd)
+	return b
+}
+
+func encodeDeleteCmd(key []byte) []byte {
+	cmd := raftCommand{Op: raft.CmdDelete, Key: key}
+	b, _ := json.Marshal(cmd)
+	return b
+}

@@ -27,7 +27,7 @@ type Cluster struct {
 // New creates a new cluster manager given this node’s address and its peers.
 // filters out itself
 // build slice of Nodes for other peers
-// return ready to use cluster manager 
+// return ready to use cluster manager
 func New(selfAddr string, peers []string) *Cluster {
 	nodes := make([]*Node, 0, len(peers))
 	for _, addr := range peers {

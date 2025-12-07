@@ -13,6 +13,11 @@ import (
 	"github.com/jerkeyray/mimori/internal/api/kv"
 )
 
+// notes:
+// mimorictl acts as a gRPC client
+// cli commands get translated into a protocol buffer message
+// and are sent over the network to a specific node by --addr flag
+
 // Server address for the node (can be overridden by flag or env)
 var addr string
 
@@ -147,8 +152,8 @@ func newHealthCmd() *cobra.Command {
 
 // clientWrapper wraps a gRPC client connection and the generated Mimori service client.
 type clientWrapper struct {
-	Client kv.KVClient
-	conn   *grpc.ClientConn
+	Client kv.KVClient      // the remote control
+	conn   *grpc.ClientConn // the connection cable
 }
 
 // Close releases the underlying gRPC connection resources.
@@ -159,21 +164,21 @@ func (cw *clientWrapper) Close() {
 }
 
 func mustConnect() *clientWrapper {
+	// set a connection timeout of 3 seconds
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// grpc.DialContext is the stable, modern connection call.
+	// dial the server
 	conn, err := grpc.DialContext(
 		ctx,
 		addr, // from the global flag
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(insecure.NewCredentials()), // tells gRPC to not use TLS/SSL (for now)
 	)
 	if err != nil {
 		log.Fatalf("failed to connect to node at %s: %v", addr, err)
 	}
 
+	// create service client and return the wrapper
 	client := kv.NewKVClient(conn)
 	return &clientWrapper{Client: client, conn: conn}
 }
-
-
