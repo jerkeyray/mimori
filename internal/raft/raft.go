@@ -59,12 +59,22 @@ func New(id NodeID, peers []NodeID) *Raft {
 		term:          0,
 		votedFor:      "",
 		electionReset: time.Now(),
-		log:           make([]LogEntry, 1),
+		log: []LogEntry{
+			{Index: 0, Term: 0, Data: nil}, // dummy entry (Raft index starts at 1)
+		},
 		nextIndex:     make(map[NodeID]int),
 		matchIndex:    make(map[NodeID]int),
 		applyCh:       make(chan LogEntry, 128),
 	}
+	
+	for _, p := range peers {
+		r.nextIndex[p] = 1
+		r.matchIndex[p] = 0
+	}
+
 	go r.runElectionTimer()
+	go r.runApplier()
+	
 	return r
 }
 

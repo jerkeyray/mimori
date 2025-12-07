@@ -1,30 +1,46 @@
+
 syntax = "proto3";
 
-package raft;
+package raftpb;
 
-option go_package = "internal/raft/raftpb;raftpb";
+option go_package = "github.com/jerkeyray/mimori/internal/raft/raftpb";
 
-message RequestVoteRequest {
-    string candidate_id = 1;
-    int32 term = 2;
+// actual raft log entry
+message LogEntry {
+  int32 index = 1;
+  int32 term = 2;
+  bytes data = 3;
 }
 
-message RequestVoteResponse {
-    int32 term = 1;
-    bool vote_granted = 2;
-}
-
+// append entries sent by leader
 message AppendEntriesRequest {
-    int32 term = 1;
-    string leader_id = 2;
+  int32 term = 1;
+  string leaderId = 2;
+
+  int32 prevLogIndex = 3;
+  int32 prevLogTerm = 4;
+
+  repeated LogEntry entries = 5;
+
+  int32 leaderCommit = 6;
 }
 
 message AppendEntriesResponse {
-    int32 term = 1;
-    bool success = 2;
+  int32 term = 1;
+  bool success = 2;
+}
+
+message RequestVoteRequest {
+  int32 term = 1;
+  string candidateId = 2;
+}
+
+message RequestVoteResponse {
+  int32 term = 1;
+  bool voteGranted = 2;
 }
 
 service Raft {
-    rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
-    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
 }

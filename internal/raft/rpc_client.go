@@ -9,70 +9,88 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// called when node becomes a candidate
+// ask every peer for a vote (best effort RPC, timeout-protected)
 func (r *Raft) broadcastRequestVote(term int) {
 	for _, peer := range r.peers {
-		peerID := peer
+		p := peer // copy so goroutine doesn't race
 
-		if peerID == "" {
+		// if peer id is trash just skip
+		if p == "" {
 			continue
 		}
 
 		go func() {
-			// give 300ms to create TCP connection and complete gRPC handshake
-			ctxDial, cancelDial := context.WithTimeout(context.Background(), 300*time.Millisecond)
-			conn, err := grpc.DialContext(ctxDial, string(peerID), grpc.WithTransportCredentials(insecure.NewCredentials()))
-			cancelDial()
+			// open gRPC conn with small timeout
+			client, conn, err := r.dialPeer(string(p))
 			if err != nil {
-				return
+				return // peer dead or slow, ignore
 			}
 			defer conn.Close()
 
-			client := raftpb.NewRaftClient(conn)
-
-			// give 400ms for the RPC to run
-			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+			// send vote request
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 			defer cancel()
 
 			resp, err := client.RequestVote(ctx, &raftpb.RequestVoteRequest{
 				CandidateId: string(r.id),
 				Term:        int32(term),
+				// NOTE: no log metadata yet, add it when log replication is wired
 			})
 			if err != nil {
 				return
 			}
 
-			// safe state update
+			// update raft state using mutex-safe path
 			r.handleVoteResponse(resp)
 		}()
 	}
 }
 
+// leader pings followers to keep them from starting elections
 func (r *Raft) sendHeartbeats() {
 	for _, peer := range r.peers {
-		peerID := peer
-		go func() {
-			if peerID == "" {
-				return
-			}
+		p := peer
 
-			ctxDial, cancelDial := context.WithTimeout(context.Background(), 300*time.Millisecond)
-			conn, err := grpc.DialContext(ctxDial, string(peerID), grpc.WithTransportCredentials(insecure.NewCredentials()))
-			cancelDial()
+		if p == "" {
+			continue
+		}
+
+		go func() {
+			client, conn, err := r.dialPeer(string(p))
 			if err != nil {
-				return
+				return // peer down, whatever
 			}
 			defer conn.Close()
-
-			client := raftpb.NewRaftClient(conn)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
 
+			// heartbeat = AppendEntries with zero entries
 			client.AppendEntries(ctx, &raftpb.AppendEntriesRequest{
 				Term:     int32(r.term),
 				LeaderId: string(r.id),
+				// no log fields yet; real Raft needs:
+				// PrevLogIndex, PrevLogTerm, Entries, LeaderCommit
 			})
 		}()
 	}
+}
+
+
+// build client conn
+func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, *grpc.ClientConn, error) {
+	// 250ms timeout is enough for vote RPCs
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	conn, err := grpc.DialContext(
+		ctx,
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return raftpb.NewRaftClient(conn), conn, nil
 }

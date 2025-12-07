@@ -52,11 +52,48 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 		return resp, nil
 	}
 
-	// else become follower
-	r.state = Follower
-	r.term = int(req.Term)
-	r.votedFor = NodeID(req.LeaderId)
+	// become a follower if the request term is newer
+	if int(req.Term) > r.term {
+		r.term = int(req.Term)
+		r.state = Follower
+		r.votedFor = ""
+	}
+
+	// reset election timeout
 	r.electionReset = time.Now()
+
+	// check log consistency
+	if req.PrevLogIndex > 0 {
+		if req.PrevLogIndex >= len(r.log) ||
+			r.log[req.PrevLogIndex].Term != int(req.PrevLogTerm) {
+			// follower log doesn’t match leader
+			resp.Success = false
+			return resp, nil
+		}
+	}
+
+	// append any new entries after PrevLogIndex
+	for _, entry := range req.Entries {
+		if int(entry.Index) < len(r.log) {
+			// if conflict, delete everything from that index onward
+			if r.log[entry.Index].Term != int(entry.Term) {
+				r.log = r.log[:entry.Index]
+			} else {
+				continue
+			}
+		}
+		// append new entry
+		r.log = append(r.log, LogEntry{
+			Index: int(entry.Index),
+			Term:  int(entry.Term),
+			Data:  entry.Data,
+		})
+	}
+
+	// update commit index
+	if int(req.LeaderCommit) > r.commitIndex {
+		r.commitIndex = min(int(req.LeaderCommit), len(r.log)-1)
+	}
 
 	resp.Success = true
 	return resp, nil
