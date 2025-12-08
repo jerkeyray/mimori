@@ -50,6 +50,8 @@ type Raft struct {
 	applyCh chan LogEntry
 
 	waiters map[int]chan struct{} // waiting clients get notified when entry is applied
+
+	leader NodeID
 }
 
 // create a new Raft instance and start election timer in the background
@@ -68,6 +70,7 @@ func New(id NodeID, peers []NodeID) *Raft {
 		matchIndex: make(map[NodeID]int),
 		applyCh:    make(chan LogEntry, 128),
 		waiters:    make(map[int]chan struct{}),
+		leader:     "",
 	}
 
 	for _, p := range peers {
@@ -153,6 +156,7 @@ func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 
 func (r *Raft) becomeLeaderLocked() {
 	r.state = Leader
+	r.leader = r.id
 	log.Printf("[raft] %s became leader for term %d", r.id, r.term)
 
 	// reset follower progress
@@ -192,11 +196,7 @@ func (r *Raft) LeaderID() NodeID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.state == Leader {
-		return r.id
-	}
-
-	return r.votedFor
+	return r.leader
 }
 
 func (r *Raft) ApplyCh() <-chan LogEntry {

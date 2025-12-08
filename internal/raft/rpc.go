@@ -59,6 +59,9 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 		r.state = Follower
 	}
 
+	// ALWAYS record the leader id from this AppendEntries
+	r.leader = NodeID(req.LeaderId)
+
 	// heartbeat resets timer
 	r.electionReset = time.Now()
 

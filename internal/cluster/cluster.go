@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -66,36 +68,46 @@ func (c *Cluster) Stop() { close(c.stop) }
 
 // pingPeers performs a heartbeat check on all known peers
 func (c *Cluster) pingPeers() {
-	// lock the mutex so no one reads from peers while they are being updated
-	c.mu.Lock()
-	defer c.mu.Unlock()
+    c.mu.Lock()
+    defer c.mu.Unlock()
 
-	for _, peer := range c.Peers {
-		// for each peer
-		// build an http GET request, wrap in a 800ms timeout context
-		// send request with http.DefaultClient
-		// if responds with OK, mark peer alive and update LastOK
-		// else mark peer dead
-		ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
-		req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/healthz", peer.Addr), nil)
-		resp, err := http.DefaultClient.Do(req)
-		cancel()
+    for _, peer := range c.Peers {
+        // shift peer.Addr's port by +1 to reach the HTTP health endpoint
+        basePort := parsePort(peer.Addr)
+        httpPort := basePort + 1
+        url := fmt.Sprintf("http://127.0.0.1:%d/healthz", httpPort)
 
-		if err == nil && resp.StatusCode == http.StatusOK {
-			if !peer.Alive {
-				log.Printf("[cluster] peer %s is now alive", peer.Addr)
-			}
-			peer.Alive = true
-			peer.LastOK = time.Now()
-			_ = resp.Body.Close()
-		} else {
-			if peer.Alive {
-				log.Printf("[cluster] peer %s seems dead", peer.Addr)
-			}
-			peer.Alive = false
-		}
-	}
+        ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+        req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+        resp, err := http.DefaultClient.Do(req)
+        cancel()
+
+        if err == nil && resp.StatusCode == http.StatusOK {
+            if !peer.Alive {
+                log.Printf("[cluster] peer %s is now alive", peer.Addr)
+            }
+            peer.Alive = true
+            peer.LastOK = time.Now()
+            _ = resp.Body.Close()
+        } else {
+            if peer.Alive {
+                log.Printf("[cluster] peer %s seems dead", peer.Addr)
+            }
+            peer.Alive = false
+        }
+    }
 }
+
+// helper for parsing peer port
+func parsePort(addr string) int {
+    parts := strings.Split(addr, ":")
+    if len(parts) < 2 {
+        return 0
+    }
+    p, _ := strconv.Atoi(parts[len(parts)-1])
+    return p
+}
+
 
 // PeersStatus returns a snapshot of the current peer states.
 func (c *Cluster) PeersStatus() []Node {
