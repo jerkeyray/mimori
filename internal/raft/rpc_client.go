@@ -140,6 +140,9 @@ func (r *Raft) sendHeartbeats() {
 				r.nextIndex[p] = r.matchIndex[p] + 1
 			}
 		}()
+		
+		// leader checks if any new index can be committed
+		r.updateCommitIndexLocked()
 	}
 }
 

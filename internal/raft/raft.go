@@ -62,11 +62,11 @@ func New(id NodeID, peers []NodeID) *Raft {
 		log: []LogEntry{
 			{Index: 0, Term: 0, Data: nil}, // dummy entry (Raft index starts at 1)
 		},
-		nextIndex:     make(map[NodeID]int),
-		matchIndex:    make(map[NodeID]int),
-		applyCh:       make(chan LogEntry, 128),
+		nextIndex:  make(map[NodeID]int),
+		matchIndex: make(map[NodeID]int),
+		applyCh:    make(chan LogEntry, 128),
 	}
-	
+
 	for _, p := range peers {
 		r.nextIndex[p] = 1
 		r.matchIndex[p] = 0
@@ -74,7 +74,7 @@ func New(id NodeID, peers []NodeID) *Raft {
 
 	go r.runElectionTimer()
 	go r.runApplier()
-	
+
 	return r
 }
 
@@ -151,13 +151,13 @@ func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 func (r *Raft) becomeLeaderLocked() {
 	r.state = Leader
 	log.Printf("[raft] %s became leader for term %d", r.id, r.term)
-	
+
 	// reset follower progress
 	// on fresh leadership, assume followers might be behind
 	lastIdx := len(r.log)
-	for _, p := range(r.peers) {
+	for _, p := range r.peers {
 		r.nextIndex[p] = lastIdx // send log starting from here
-		r.matchIndex[p] = 0 // nothing confirmed yet
+		r.matchIndex[p] = 0      // nothing confirmed yet
 	}
 
 	// become leader and start pulsing heartbeats every 75 ms
@@ -229,6 +229,7 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 		return 0, ErrNotLeader
 	}
 
+	// append a new uncommited log entry
 	index := len(r.log)
 	entry := LogEntry{
 		Index: index,
@@ -237,7 +238,33 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 	}
 	r.log = append(r.log, entry)
 
-	r.commitIndex = index
-
 	return index, nil
+}
+
+// moves commitIndex forward if a majority
+// of nodes have replicated a given index
+func (r *Raft) updateCommitIndexLocked() {
+	if r.state != Leader {
+		return
+	}
+
+	// total nodes = followers + leader
+	totalNodes := len(r.peers) + 1
+	majority := (totalNodes / 2) + 1
+
+	// walk from the end of the log down to current commitIndex
+	for N := len(r.log) - 1; N > r.commitIndex; N-- {
+		count := 1 // leader always has its own log
+
+		for _, p := range r.peers {
+			if r.matchIndex[p] >= N {
+				count++
+			}
+		}
+
+		if count >= majority {
+			r.commitIndex = N
+			break
+		}
+	}
 }
