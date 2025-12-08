@@ -19,10 +19,9 @@ import (
 func main() {
 	addr := env("MIMORI_ADDR", ":4000")
 	dataDir := env("MIMORI_DATA", "data")
-
 	peerList := splitPeers(env("MIMORI_PEERS", ""))
 
-	// initialize kv engine
+	// open pebble DB
 	store, err := storage.Open(dataDir)
 	if err != nil {
 		log.Fatalf("failed to open storage: %v", err)
@@ -30,9 +29,11 @@ func main() {
 	defer store.Close()
 
 	// give the network addr as the unique raft node id and give its peerList
-	raftNode := raft.New(raft.NodeID(addr), convertPeersToNodeIDs(peerList))
+	raftNode := raft.New(
+		raft.NodeID(addr), convertPeersToNodeIDs(peerList),
+	)
 
-	// state machine apply loop
+	// state machine apply loop: decode cmds and apply to KV
 	go func() {
 		for entry := range raftNode.ApplyCh() {
 			var cmd raft.Command
@@ -51,11 +52,12 @@ func main() {
 					log.Printf("apply DELETE failed: %v", err)
 				}
 			default:
-				log.Printf("unkown command op: %v", cmd.Op)
+				log.Printf("unknown command op: %v", cmd.Op)
 			}
 		}
 	}()
 
+	// start cluster heartbeat manager
 	clusterMgr := cluster.New(addr, peerList)
 	clusterMgr.Start()
 	defer clusterMgr.Stop()

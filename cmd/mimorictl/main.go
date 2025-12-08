@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -29,7 +30,7 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "mimorictl",
 		Short: "MimoriDB CLI — talk to a running Mimori node",
-		Long: `mimorictl is a simple client for sending key/value commands 
+		Long: `mimorictl is a simple client for sending key/value commands
 to a MimoriDB node running locally or remotely.`,
 	}
 
@@ -60,16 +61,11 @@ func newPutCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			key := []byte(args[0])
 			val := []byte(args[1])
-			client := mustConnect()
-			defer client.Close()
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-
-			_, err := client.Client.Put(ctx, &kv.PutRequest{Key: key, Value: val})
-			if err != nil {
+			if err := doPut(key, val); err != nil {
 				log.Fatalf("put failed: %v", err)
 			}
+
 			fmt.Println("ok")
 		},
 	}
@@ -106,21 +102,15 @@ func newGetCmd() *cobra.Command {
 // newDelCmd creates "del" subcommand: mimorictl del key
 func newDelCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "del [key]",
-		Short: "Delete a key from the database",
-		Args:  cobra.ExactArgs(1),
+		Use:  "del [key]",
+		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			key := []byte(args[0])
-			client := mustConnect()
-			defer client.Close()
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-
-			_, err := client.Client.Delete(ctx, &kv.DeleteRequest{Key: key})
-			if err != nil {
+			if err := doDelete(key); err != nil {
 				log.Fatalf("delete failed: %v", err)
 			}
+
 			fmt.Println("deleted")
 		},
 	}
@@ -179,6 +169,96 @@ func mustConnect() *clientWrapper {
 	}
 
 	// create service client and return the wrapper
+	client := kv.NewKVClient(conn)
+	return &clientWrapper{Client: client, conn: conn}
+}
+
+// try to pull "leader=ADDR" out of the error message
+func extractLeaderAddr(err error) (string, bool) {
+	msg := err.Error()
+	// server formats as: "not leader, leader=:4001"
+	idx := strings.Index(msg, "leader=")
+	if idx == -1 {
+		return "", false
+	}
+
+	leader := msg[idx+len("leader="):]
+	leader = strings.TrimSpace(leader)
+	if leader == "" {
+		return "", false
+	}
+	return leader, true
+}
+
+func doPut(key, val []byte) error {
+	addrToUse := addr // default CLI flag
+
+	for attempt := 0; attempt < 2; attempt++ {
+		client := mustConnectTo(addrToUse)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		_, err := client.Client.Put(ctx, &kv.PutRequest{Key: key, Value: val})
+		client.Close()
+
+		if err == nil {
+			return nil
+		}
+
+		// see if this is a "not leader" case
+		if leader, ok := extractLeaderAddr(err); ok {
+			addrToUse = leader
+			continue // retry on leader
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("redirected but still failed")
+}
+
+func doDelete(key []byte) error {
+	addrToUse := addr
+
+	for attempt := 0; attempt < 2; attempt++ {
+		client := mustConnectTo(addrToUse)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		_, err := client.Client.Delete(ctx, &kv.DeleteRequest{Key: key})
+		client.Close()
+
+		if err == nil {
+			return nil
+		}
+
+		// check redirect
+		if leader, ok := extractLeaderAddr(err); ok {
+			addrToUse = leader
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("redirected but still failed")
+}
+
+// same as mustConnect but allows choosing a different target address
+func mustConnectTo(a string) *clientWrapper {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	conn, err := grpc.DialContext(
+		ctx,
+		a,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+
+	if err != nil {
+		log.Fatalf("failed to connect to node at %s: %v", a, err)
+	}
+
 	client := kv.NewKVClient(conn)
 	return &clientWrapper{Client: client, conn: conn}
 }
