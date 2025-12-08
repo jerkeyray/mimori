@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"encoding/json"
 
@@ -35,17 +37,26 @@ func NewServer(store storage.KV, r *raft.Raft) *Server {
 // gRPC method implementations
 
 func (s *Server) Put(ctx context.Context, req *kv.PutRequest) (*kv.PutResponse, error) {
+	// reject if follower
 	if !s.raft.IsLeader() {
-		// TODO: encode leader redirect error later
-		return nil, fmt.Errorf("not leader")
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"not leader, leader=%s",
+			s.raft.LeaderID(),
+		)
+
 	}
 
 	data := encodePutCmd(req.Key, req.Value)
 
-	_, err := s.raft.Propose(data)
+	// propose to raft log
+	index , err := s.raft.Propose(data)
 	if err != nil {
 		return nil, err
 	}
+
+	// block until commited and applied
+	<-s.raft.AppliedWait(index)
 
 	return &kv.PutResponse{Ok: true}, nil
 }
@@ -65,10 +76,13 @@ func (s *Server) Delete(ctx context.Context, req *kv.DeleteRequest) (*kv.DeleteR
 
 	data := encodeDeleteCmd(req.Key)
 
-	_, err := s.raft.Propose(data)
+	index , err := s.raft.Propose(data)
 	if err != nil {
 		return nil, err
 	}
+	
+	// block until commited and applied
+	<-s.raft.AppliedWait(index)
 
 	return &kv.DeleteResponse{Deleted: true}, nil
 }

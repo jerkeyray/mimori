@@ -48,6 +48,8 @@ type Raft struct {
 
 	// channel to delvier commited entries to the state machine
 	applyCh chan LogEntry
+
+	waiters map[int]chan struct{} // waiting clients get notified when entry is applied
 }
 
 // create a new Raft instance and start election timer in the background
@@ -65,6 +67,7 @@ func New(id NodeID, peers []NodeID) *Raft {
 		nextIndex:  make(map[NodeID]int),
 		matchIndex: make(map[NodeID]int),
 		applyCh:    make(chan LogEntry, 128),
+		waiters:    make(map[int]chan struct{}),
 	}
 
 	for _, p := range peers {
@@ -211,8 +214,13 @@ func (r *Raft) runApplier() {
 
 			// deliver to state machine
 			r.applyCh <- entry
-
 			r.mu.Lock()
+
+			// notify waiters
+			if ch, ok := r.waiters[r.lastApplied]; ok {
+				close(ch)
+				delete(r.waiters, r.lastApplied)
+			}
 		}
 		r.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
@@ -267,4 +275,23 @@ func (r *Raft) updateCommitIndexLocked() {
 			break
 		}
 	}
+}
+
+// returns channel that will be closed when the given
+// log index has been applied to the state machine
+
+func (r *Raft) AppliedWait(index int) <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// if it's already applied, return closed channel
+	if index <= r.lastApplied {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+
+	ch := make(chan struct{}, 1)
+	r.waiters[index] = ch
+	return ch
 }
