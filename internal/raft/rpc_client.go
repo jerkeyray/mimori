@@ -48,7 +48,17 @@ func (r *Raft) broadcastRequestVote(term int) {
 
 // leader pings followers to keep them from starting elections
 func (r *Raft) sendHeartbeats() {
-	for _, peer := range r.peers {
+	// snapshot shared state once so we don't hold lock across RPCs
+	r.mu.Lock()
+	term := r.term
+	leaderID := r.id
+	leaderCommit := r.commitIndex
+	logCopy := make([]LogEntry, len(r.log))
+	copy(logCopy, r.log)
+	peers := append([]NodeID(nil), r.peers...)
+	r.mu.Unlock()
+
+	for _, peer := range peers {
 		p := peer
 
 		if p == "" {
@@ -58,24 +68,80 @@ func (r *Raft) sendHeartbeats() {
 		go func() {
 			client, conn, err := r.dialPeer(string(p))
 			if err != nil {
-				return // peer down, whatever
+				// peer is down or slow, ignore for now
+				return
 			}
 			defer conn.Close()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			r.mu.Lock()
+			// figure out what to send this follower
+			nextIdx := r.nextIndex[p]
+			if nextIdx < 1 {
+				nextIdx = 1
+			}
+
+			prevLogIndex := nextIdx - 1
+			prevLogTerm := 0
+			if prevLogIndex >= 0 && prevLogIndex < len(logCopy) {
+				prevLogTerm = logCopy[prevLogIndex].Term
+			}
+
+			// entries from nextIdx onward
+			entries := make([]*raftpb.LogEntry, 0)
+			for i := nextIdx; i < len(logCopy); i++ {
+				e := logCopy[i]
+				entries = append(entries, &raftpb.LogEntry{
+					Index: int32(e.Index),
+					Term:  int32(e.Term),
+					Data:  e.Data,
+				})
+			}
+			r.mu.Unlock()
+
+			// build request
+			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 			defer cancel()
 
-			// heartbeat = AppendEntries with zero entries
-			client.AppendEntries(ctx, &raftpb.AppendEntriesRequest{
-				Term:     int32(r.term),
-				LeaderId: string(r.id),
-				// no log fields yet; real Raft needs:
-				// PrevLogIndex, PrevLogTerm, Entries, LeaderCommit
+			resp, err := client.AppendEntries(ctx, &raftpb.AppendEntriesRequest{
+				Term:         int32(term),
+				LeaderId:     string(leaderID),
+				PrevLogIndex: int32(prevLogIndex),
+				PrevLogTerm:  int32(prevLogTerm),
+				Entries:      entries,
+				LeaderCommit: int32(leaderCommit),
 			})
+			if err != nil {
+				return
+			}
+
+			r.mu.Lock()
+			defer r.mu.Unlock()
+
+			// leader might be stale now
+			if int(resp.Term) > r.term {
+				r.term = int(resp.Term)
+				r.state = Follower
+				r.votedFor = ""
+				return
+			}
+
+			// if follower rejected, back up nextIndex and try shorter prefix next time
+			if !resp.Success {
+				if r.nextIndex[p] > 1 {
+					r.nextIndex[p]--
+				}
+				return
+			}
+
+			// success: follower now matches us up to last sent entry
+			if len(entries) > 0 {
+				lastSent := entries[len(entries)-1].Index
+				r.matchIndex[p] = int(lastSent)
+				r.nextIndex[p] = r.matchIndex[p] + 1
+			}
 		}()
 	}
 }
-
 
 // build client conn
 func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, *grpc.ClientConn, error) {

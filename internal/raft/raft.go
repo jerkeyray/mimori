@@ -151,6 +151,14 @@ func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 func (r *Raft) becomeLeaderLocked() {
 	r.state = Leader
 	log.Printf("[raft] %s became leader for term %d", r.id, r.term)
+	
+	// reset follower progress
+	// on fresh leadership, assume followers might be behind
+	lastIdx := len(r.log)
+	for _, p := range(r.peers) {
+		r.nextIndex[p] = lastIdx // send log starting from here
+		r.matchIndex[p] = 0 // nothing confirmed yet
+	}
 
 	// become leader and start pulsing heartbeats every 75 ms
 	go func() {

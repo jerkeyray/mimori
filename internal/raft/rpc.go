@@ -46,53 +46,59 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 
 	resp := &raftpb.AppendEntriesResponse{Term: int32(r.term)}
 
-	// if incoming term is less than local term, resp.Success = false
+	// reject old terms
 	if int(req.Term) < r.term {
 		resp.Success = false
 		return resp, nil
 	}
 
-	// become a follower if the request term is newer
+	// newer term = respect leader
 	if int(req.Term) > r.term {
 		r.term = int(req.Term)
-		r.state = Follower
 		r.votedFor = ""
+		r.state = Follower
 	}
 
-	// reset election timeout
+	// heartbeat resets timer
 	r.electionReset = time.Now()
 
-	// check log consistency
+	// log consistency check
 	if req.PrevLogIndex > 0 {
-		if req.PrevLogIndex >= len(r.log) ||
-			r.log[req.PrevLogIndex].Term != int(req.PrevLogTerm) {
-			// follower log doesn’t match leader
+		prevIdx := int(req.PrevLogIndex)
+
+		if prevIdx >= len(r.log) ||
+			r.log[prevIdx].Term != int(req.PrevLogTerm) {
+
 			resp.Success = false
 			return resp, nil
 		}
 	}
 
-	// append any new entries after PrevLogIndex
-	for _, entry := range req.Entries {
-		if int(entry.Index) < len(r.log) {
-			// if conflict, delete everything from that index onward
-			if r.log[entry.Index].Term != int(entry.Term) {
-				r.log = r.log[:entry.Index]
+	// append entries
+	for _, e := range req.Entries {
+		idx := int(e.Index)
+
+		// if entry exists but term mismatches → conflict
+		if idx < len(r.log) {
+			if r.log[idx].Term != int(e.Term) {
+				r.log = r.log[:idx]
 			} else {
 				continue
 			}
 		}
-		// append new entry
+
+		// append fresh entry
 		r.log = append(r.log, LogEntry{
-			Index: int(entry.Index),
-			Term:  int(entry.Term),
-			Data:  entry.Data,
+			Index: idx,
+			Term:  int(e.Term),
+			Data:  e.Data,
 		})
 	}
 
 	// update commit index
 	if int(req.LeaderCommit) > r.commitIndex {
-		r.commitIndex = min(int(req.LeaderCommit), len(r.log)-1)
+		last := len(r.log) - 1
+		r.commitIndex = min(int(req.LeaderCommit), last)
 	}
 
 	resp.Success = true
