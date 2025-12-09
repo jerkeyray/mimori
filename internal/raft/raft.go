@@ -295,3 +295,44 @@ func (r *Raft) AppliedWait(index int) <-chan struct{} {
 	r.waiters[index] = ch
 	return ch
 }
+
+// Status is a snapshot of the raft node state for debugging / observability.
+type Status struct {
+	ID          string `json:"id"`
+	State       string `json:"state"`
+	Term        int    `json:"term"`
+	LeaderID    string `json:"leader_id"`
+	CommitIndex int    `json:"commit_index"`
+	LastApplied int    `json:"last_applied"`
+	LogLength   int    `json:"log_length"`
+}
+
+// helper to turn RaftState into string
+func (s RaftState) String() string {
+	switch s {
+	case Follower:
+		return "follower"
+	case Candidate:
+		return "candidate"
+	case Leader:
+		return "leader"
+	default:
+		return "unknown"
+	}
+}
+
+// Status returns a copy of the important raft state fields.
+func (r *Raft) Status() Status {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return Status{
+		ID:          string(r.id),
+		State:       r.state.String(),
+		Term:        r.term,
+		LeaderID:    string(r.leader),
+		CommitIndex: r.commitIndex,
+		LastApplied: r.lastApplied,
+		LogLength:   len(r.log),
+	}
+}

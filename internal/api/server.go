@@ -50,7 +50,7 @@ func (s *Server) Put(ctx context.Context, req *kv.PutRequest) (*kv.PutResponse, 
 	data := encodePutCmd(req.Key, req.Value)
 
 	// propose to raft log
-	index , err := s.raft.Propose(data)
+	index, err := s.raft.Propose(data)
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +76,11 @@ func (s *Server) Delete(ctx context.Context, req *kv.DeleteRequest) (*kv.DeleteR
 
 	data := encodeDeleteCmd(req.Key)
 
-	index , err := s.raft.Propose(data)
+	index, err := s.raft.Propose(data)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// block until commited and applied
 	<-s.raft.AppliedWait(index)
 
@@ -104,12 +104,31 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 	go func() {
 		httpPort := parsePort(addr) + 1
 		httpAddr := fmt.Sprintf(":%d", httpPort)
-		http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+
+		mux := http.NewServeMux()
+
+		// health check
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 		})
-		log.Printf("[http] health endpoint at %s", httpAddr)
-		_ = http.ListenAndServe(httpAddr, nil)
+
+		// raft status dump
+		mux.HandleFunc("/raft/status", func(w http.ResponseWriter, r *http.Request) {
+			st := raftNode.Status()
+
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(st); err != nil {
+				log.Printf("[http] status encode failed: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		})
+
+		log.Printf("[http] endpoints at %s", httpAddr)
+		if err := http.ListenAndServe(httpAddr, mux); err != nil {
+			log.Printf("[http] server error on %s: %v", httpAddr, err)
+		}
 	}()
 
 	// create gRPC server
