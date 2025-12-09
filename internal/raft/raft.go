@@ -57,6 +57,9 @@ type Raft struct {
 
 	meta     *MetaStore
 	logStore *LogStore
+
+	// injectable transport for testing
+	dialer func(addr string) (raftpb.RaftClient, interface{ Close() error }, error)
 }
 
 // create a new Raft instance and start election timer in the background
@@ -152,6 +155,10 @@ func (r *Raft) startElectionLocked() {
 	r.meta.Save(r.term, r.votedFor)
 	r.electionReset = time.Now()
 	r.votes = 1 // we vote for ourselves
+	if r.votes > len(r.peers)/2 {
+		r.becomeLeaderLocked()
+		return
+	}
 
 	go r.broadcastRequestVote(r.term)
 

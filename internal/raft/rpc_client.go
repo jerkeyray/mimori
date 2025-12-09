@@ -142,12 +142,24 @@ func (r *Raft) sendHeartbeats() {
 		}()
 		
 		// leader checks if any new index can be committed
+		r.mu.Lock()
 		r.updateCommitIndexLocked()
+		r.mu.Unlock()
+	}
+
+	// For single node clusters, we still need to check commit index
+	if len(peers) == 0 {
+		r.mu.Lock()
+		r.updateCommitIndexLocked()
+		r.mu.Unlock()
 	}
 }
 
 // build client conn
-func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, *grpc.ClientConn, error) {
+func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, interface{ Close() error }, error) {
+	if r.dialer != nil {
+		return r.dialer(addr)
+	}
 	// 250ms timeout is enough for vote RPCs
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
