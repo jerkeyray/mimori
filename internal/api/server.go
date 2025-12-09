@@ -62,6 +62,15 @@ func (s *Server) Put(ctx context.Context, req *kv.PutRequest) (*kv.PutResponse, 
 }
 
 func (s *Server) Get(ctx context.Context, req *kv.GetRequest) (*kv.GetResponse, error) {
+	// enforce leader reads for strong consistency
+	if !s.raft.IsLeader() {
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"not leader, leader=%s",
+			s.raft.LeaderID(),
+		)
+	}
+
 	val, found, err := s.store.Get(req.Key)
 	if err != nil {
 		return nil, err

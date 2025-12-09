@@ -273,7 +273,7 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 		Term:  r.term,
 		Data:  cmdData,
 	}
-	
+
 	// append to in-memory log
 	r.log = append(r.log, entry)
 
@@ -301,6 +301,11 @@ func (r *Raft) updateCommitIndexLocked() {
 	// walk from the end of the log down to current commitIndex
 	for N := len(r.log) - 1; N > r.commitIndex; N-- {
 		count := 1 // leader always has its own log
+
+		// prevents committing old entries that could be overwritten
+		if r.log[N].Term != r.term {
+			continue
+		}
 
 		for _, p := range r.peers {
 			if r.matchIndex[p] >= N {
