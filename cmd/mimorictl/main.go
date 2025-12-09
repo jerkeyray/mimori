@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +46,7 @@ to a MimoriDB node running locally or remotely.`,
 		newGetCmd(),
 		newDelCmd(),
 		newHealthCmd(),
+		newStatusCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -261,4 +265,46 @@ func mustConnectTo(a string) *clientWrapper {
 
 	client := kv.NewKVClient(conn)
 	return &clientWrapper{Client: client, conn: conn}
+}
+
+func newStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show Raft and node status for debugging",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+
+			// build HTTP URL: if grpc is :4000, health/status is :4001
+			host, port, ok := strings.Cut(addr, ":")
+			if !ok {
+				log.Fatalf("invalid addr: %s", addr)
+			}
+
+			httpPort := portToInt(port) + 1
+			url := fmt.Sprintf("http://%s:%d/raft/status", host, httpPort)
+
+			// do HTTP GET
+			client := http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Get(url)
+			if err != nil {
+				log.Fatalf("failed to fetch status: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Fatalf("failed to read response: %v", err)
+			}
+
+			fmt.Println(string(body))
+		},
+	}
+}
+
+func portToInt(p string) int {
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		log.Fatalf("invalid port: %s", p)
+	}
+	return n
 }

@@ -336,3 +336,4 @@ func (r *Raft) Status() Status {
 		LogLength:   len(r.log),
 	}
 }
+
