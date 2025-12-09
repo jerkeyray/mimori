@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"log"
 	"time"
 
 	raftpb "github.com/jerkeyray/mimori/internal/raft/raftpb"
@@ -25,6 +26,7 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
+		r.meta.Save(r.term, r.votedFor)
 	}
 
 	// if haven't voted already
@@ -33,6 +35,7 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 		r.votedFor = NodeID(req.CandidateId)
 		resp.VoteGranted = true
 		r.electionReset = time.Now()
+		r.meta.Save(r.term, r.votedFor)
 		return resp, nil
 	}
 
@@ -57,6 +60,7 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
+		r.meta.Save(r.term, r.votedFor)
 	}
 
 	// ALWAYS record the leader id from this AppendEntries
@@ -96,6 +100,13 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 			Term:  int(e.Term),
 			Data:  e.Data,
 		})
+	}
+
+	// persist updated log to disk
+	if r.logStore != nil {
+		if err := r.logStore.SaveAll(r.log); err != nil {
+			log.Printf("[raft] follower failed to persist log: %v", err)
+		}
 	}
 
 	// update commit index

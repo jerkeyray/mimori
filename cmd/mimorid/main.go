@@ -30,7 +30,7 @@ func main() {
 
 	// give the network addr as the unique raft node id and give its peerList
 	raftNode := raft.New(
-		raft.NodeID(addr), convertPeersToNodeIDs(peerList),
+		raft.NodeID(addr), convertPeersToNodeIDs(peerList), dataDir,
 	)
 
 	// state machine apply loop: decode cmds and apply to KV

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"path"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -52,16 +54,40 @@ type Raft struct {
 	waiters map[int]chan struct{} // waiting clients get notified when entry is applied
 
 	leader NodeID
+
+	meta     *MetaStore
+	logStore *LogStore
 }
 
 // create a new Raft instance and start election timer in the background
-func New(id NodeID, peers []NodeID) *Raft {
+func New(id NodeID, peers []NodeID, dataDir string) *Raft {
+	metaPath := path.Join(dataDir, "raft-meta.json")
+	meta := NewMetaStore(metaPath)
+
+	term, votedFor, _ := meta.Load()
+
+	// log file for raft log
+	logPath := filepath.Join(dataDir, "raft-log.json")
+	logStore := NewLogStore(logPath)
+
+	entries, err := logStore.Load()
+	if err != nil {
+		log.Printf("[raft] failed to load log from disk: %v", err)
+	}
+
+	// always have dummy entry at index 0
+	if len(entries) == 0 {
+		entries = []LogEntry{
+			{Index: 0, Term: 0, Data: nil},
+		}
+	}
+
 	r := &Raft{
 		id:            id,
 		peers:         peers,
 		state:         Follower,
-		term:          0,
-		votedFor:      "",
+		term:          term,
+		votedFor:      votedFor,
 		electionReset: time.Now(),
 		log: []LogEntry{
 			{Index: 0, Term: 0, Data: nil}, // dummy entry (Raft index starts at 1)
@@ -71,6 +97,8 @@ func New(id NodeID, peers []NodeID) *Raft {
 		applyCh:    make(chan LogEntry, 128),
 		waiters:    make(map[int]chan struct{}),
 		leader:     "",
+		meta:       meta,
+		logStore:   logStore,
 	}
 
 	for _, p := range peers {
@@ -121,6 +149,7 @@ func (r *Raft) startElectionLocked() {
 	r.state = Candidate
 	r.term++
 	r.votedFor = r.id
+	r.meta.Save(r.term, r.votedFor)
 	r.electionReset = time.Now()
 	r.votes = 1 // we vote for ourselves
 
@@ -244,7 +273,16 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 		Term:  r.term,
 		Data:  cmdData,
 	}
+	
+	// append to in-memory log
 	r.log = append(r.log, entry)
+
+	// persist full log to disk
+	if r.logStore != nil {
+		if err := r.logStore.SaveAll(r.log); err != nil {
+			log.Printf("[raft] failed to persist log: %v", err)
+		}
+	}
 
 	return index, nil
 }
@@ -336,4 +374,3 @@ func (r *Raft) Status() Status {
 		LogLength:   len(r.log),
 	}
 }
-
