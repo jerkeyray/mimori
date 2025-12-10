@@ -168,17 +168,8 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 
 // extracts port from string and returns the number
 func parsePort(addr string) int {
-	// split on colon, take the last part (the port)
-	parts := strings.Split(addr, ":")
-	if len(parts) == 0 {
-		return 0
-	}
-	portStr := parts[len(parts)-1]
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return 0
-	}
-	return port
+	_, p := parseHostPort(addr)
+	return p
 }
 
 type raftCommand struct {
@@ -197,4 +188,26 @@ func encodeDeleteCmd(key []byte) []byte {
 	cmd := raftCommand{Op: raft.CmdDelete, Key: key}
 	b, _ := json.Marshal(cmd)
 	return b
+}
+
+// parseHostPort returns host (possibly empty for ":4000") and port as int.
+// Accepts forms: ":4000", "127.0.0.1:4000", "[::1]:4000".
+// On parse error returns "", 0.
+func parseHostPort(addr string) (string, int) {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		// net.SplitHostPort fails for ":4000" without host on older Go versions?
+		// Try a fallback: if addr starts with ":", treat host as empty.
+		if len(addr) > 0 && addr[0] == ':' {
+			host = ""
+			portStr = addr[1:]
+		} else {
+			return "", 0
+		}
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		return host, 0
+	}
+	return host, p
 }
