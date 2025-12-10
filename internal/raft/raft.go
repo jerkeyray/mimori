@@ -80,11 +80,9 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 		log.Printf("[raft] failed to load log from disk: %v", err)
 	}
 
-	// always have dummy entry at index 0
-	if len(entries) == 0 {
-		entries = []LogEntry{
-			{Index: 0, Term: 0, Data: nil},
-		}
+	log := entries
+	if len(log) == 0 {
+		log = []LogEntry{{Index: 0, Term: 0, Data: nil}}
 	}
 
 	r := &Raft{
@@ -94,17 +92,15 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 		term:          term,
 		votedFor:      votedFor,
 		electionReset: time.Now(),
-		log: []LogEntry{
-			{Index: 0, Term: 0, Data: nil}, // dummy entry (Raft index starts at 1)
-		},
-		nextIndex:  make(map[NodeID]int),
-		matchIndex: make(map[NodeID]int),
-		applyCh:    make(chan LogEntry, 128),
-		waiters:    make(map[int]chan struct{}),
-		leader:     "",
-		meta:       meta,
-		logStore:   logStore,
-		shutdownCh: make(chan struct{}),
+		log:           entries,
+		nextIndex:     make(map[NodeID]int),
+		matchIndex:    make(map[NodeID]int),
+		applyCh:       make(chan LogEntry, 128),
+		waiters:       make(map[int]chan struct{}),
+		leader:        "",
+		meta:          meta,
+		logStore:      logStore,
+		shutdownCh:    make(chan struct{}),
 	}
 
 	for _, p := range peers {
