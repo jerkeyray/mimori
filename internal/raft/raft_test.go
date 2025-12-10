@@ -11,11 +11,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// SetDialer allows injecting a mock dialer for testing
-func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, interface{ Close() error }, error)) {
-	r.dialer = d
-}
-
 // Mock Network
 type mockNetwork struct {
 	mu    sync.Mutex

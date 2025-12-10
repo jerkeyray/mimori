@@ -21,16 +21,25 @@ import (
 	"github.com/jerkeyray/mimori/internal/storage"
 )
 
+// RaftNode interface for mocking
+type RaftNode interface {
+	IsLeader() bool
+	LeaderID() raft.NodeID
+	Propose(cmdData []byte) (int, error)
+	AppliedWait(index int) <-chan struct{}
+	Status() raft.Status
+}
+
 // this file defines how our server responds to client commands(mimorictl)
 
 // gRPC service implementation
 type Server struct {
 	kv.UnimplementedKVServer
 	store storage.KV // pebble wrapper
-	raft  *raft.Raft
+	raft  RaftNode
 }
 
-func NewServer(store storage.KV, r *raft.Raft) *Server {
+func NewServer(store storage.KV, r RaftNode) *Server {
 	return &Server{store: store, raft: r}
 }
 

@@ -60,6 +60,8 @@ type Raft struct {
 
 	// injectable transport for testing
 	dialer func(addr string) (raftpb.RaftClient, interface{ Close() error }, error)
+
+	shutdownCh chan struct{}
 }
 
 // create a new Raft instance and start election timer in the background
@@ -102,6 +104,7 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 		leader:     "",
 		meta:       meta,
 		logStore:   logStore,
+		shutdownCh: make(chan struct{}),
 	}
 
 	for _, p := range peers {
@@ -115,6 +118,10 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 	return r
 }
 
+func (r *Raft) Stop() {
+	close(r.shutdownCh)
+}
+
 func (r *Raft) randomElectionTimeout() time.Duration {
 	// between 150ms and 300ms
 	return time.Duration(150+rand.Intn(150)) * time.Millisecond
@@ -126,9 +133,14 @@ func (r *Raft) runElectionTimer() {
 	// if no heartbeat heard in a while, start new election
 	timeout := r.randomElectionTimeout()
 	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
-		<-ticker.C
+		select {
+		case <-r.shutdownCh:
+			return
+		case <-ticker.C:
+		}
 
 		r.mu.Lock()
 		if r.state == Leader {
@@ -209,6 +221,11 @@ func (r *Raft) becomeLeaderLocked() {
 		defer ticker.Stop()
 
 		for {
+			select {
+			case <-r.shutdownCh:
+				return
+			case <-ticker.C:
+			}
 			r.mu.Lock()
 			if r.state != Leader {
 				r.mu.Unlock()
@@ -217,7 +234,6 @@ func (r *Raft) becomeLeaderLocked() {
 			r.mu.Unlock()
 
 			r.sendHeartbeats()
-			<-ticker.C
 		}
 	}()
 }
@@ -242,6 +258,12 @@ func (r *Raft) ApplyCh() <-chan LogEntry {
 // push the commited log entries to the DB node
 func (r *Raft) runApplier() {
 	for {
+		select {
+		case <-r.shutdownCh:
+			return
+		default:
+		}
+
 		r.mu.Lock()
 		for r.commitIndex > r.lastApplied {
 			r.lastApplied++
@@ -385,4 +407,9 @@ func (r *Raft) Status() Status {
 		LastApplied: r.lastApplied,
 		LogLength:   len(r.log),
 	}
+}
+
+// SetDialer allows injecting a mock dialer for testing
+func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, interface{ Close() error }, error)) {
+	r.dialer = d
 }
