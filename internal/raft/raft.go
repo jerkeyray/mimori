@@ -10,6 +10,7 @@ import (
 	"time"
 
 	raftpb "github.com/jerkeyray/mimori/internal/raft/raftpb"
+	"google.golang.org/grpc"
 )
 
 // RaftState represents what role a node is in
@@ -59,7 +60,7 @@ type Raft struct {
 	logStore *LogStore
 
 	// injectable transport for testing
-	dialer func(addr string) (raftpb.RaftClient, interface{ Close() error }, error)
+	dialer func(addr string) (raftpb.RaftClient, *grpc.ClientConn, error)
 
 	shutdownCh chan struct{}
 }
@@ -406,6 +407,7 @@ func (r *Raft) Status() Status {
 }
 
 // SetDialer allows injecting a mock dialer for testing
-func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, interface{ Close() error }, error)) {
-	r.dialer = d
+func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, *grpc.ClientConn, error)) {
+    r.dialer = d
 }
+

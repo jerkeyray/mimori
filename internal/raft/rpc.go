@@ -12,33 +12,51 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	resp := &raftpb.RequestVoteResponse{Term: int32(r.term)}
+	resp := &raftpb.RequestVoteResponse{
+		Term: int32(r.term),
+	}
 
-	// if incoming term is less than local term, deny vote, return current term
+	// 1. Reject request from a stale term
 	if int(req.Term) < r.term {
 		resp.VoteGranted = false
 		return resp, nil
 	}
 
-	// if incoming term is more than local term
-	// update term, clear voted for, become follower
+	// 2. If the candidate has a newer term than us, update to it
 	if int(req.Term) > r.term {
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
-		r.meta.Save(r.term, r.votedFor)
+		_ = r.meta.Save(r.term, r.votedFor)
 	}
 
-	// if haven't voted already
-	// grant vote and reset election timeout
-	if r.votedFor == "" || r.votedFor == NodeID(req.CandidateId) {
-		r.votedFor = NodeID(req.CandidateId)
-		resp.VoteGranted = true
-		r.electionReset = time.Now()
-		r.meta.Save(r.term, r.votedFor)
+	// 3. Enforce Raft log up-to-date rule
+	myLastIndex := len(r.log) - 1
+	myLastTerm := r.log[myLastIndex].Term
+
+	candidateLastTerm := int(req.LastLogTerm)
+	candidateLastIndex := int(req.LastLogIndex)
+
+	upToDate :=
+		candidateLastTerm > myLastTerm ||
+			(candidateLastTerm == myLastTerm && candidateLastIndex >= myLastIndex)
+
+	if !upToDate {
+		// Candidate's log is stale
+		resp.VoteGranted = false
 		return resp, nil
 	}
 
+	// 4. Check if we can vote for the candidate
+	if r.votedFor == "" || r.votedFor == NodeID(req.CandidateId) {
+		r.votedFor = NodeID(req.CandidateId)
+		r.electionReset = time.Now()
+		_ = r.meta.Save(r.term, r.votedFor)
+		resp.VoteGranted = true
+		return resp, nil
+	}
+
+	// 5. Already voted for someone else this term
 	resp.VoteGranted = false
 	return resp, nil
 }
@@ -49,52 +67,49 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 
 	resp := &raftpb.AppendEntriesResponse{Term: int32(r.term)}
 
-	// reject old terms
+	// 1. Reject old term
 	if int(req.Term) < r.term {
 		resp.Success = false
 		return resp, nil
 	}
 
-	// newer term = respect leader
+	// 2. Update to a newer term if needed
 	if int(req.Term) > r.term {
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
-		r.meta.Save(r.term, r.votedFor)
+		_ = r.meta.Save(r.term, r.votedFor)
 	}
 
-	// ALWAYS record the leader id from this AppendEntries
+	// 3. Set leader ID and heartbeat timestamp
 	r.leader = NodeID(req.LeaderId)
-
-	// heartbeat resets timer
 	r.electionReset = time.Now()
 
-	// log consistency check
+	// 4. Log consistency check
 	if req.PrevLogIndex > 0 {
-		prevIdx := int(req.PrevLogIndex)
+		idx := int(req.PrevLogIndex)
 
-		if prevIdx >= len(r.log) ||
-			r.log[prevIdx].Term != int(req.PrevLogTerm) {
-
+		if idx >= len(r.log) || r.log[idx].Term != int(req.PrevLogTerm) {
+			// follower's log doesn't match leader's
 			resp.Success = false
 			return resp, nil
 		}
 	}
 
-	// append entries
+	// 5. Append or overwrite entries
 	for _, e := range req.Entries {
 		idx := int(e.Index)
 
-		// if entry exists but term mismatches → conflict
 		if idx < len(r.log) {
 			if r.log[idx].Term != int(e.Term) {
+				// remove conflict
 				r.log = r.log[:idx]
 			} else {
 				continue
 			}
 		}
 
-		// append fresh entry
+		// append new entry
 		r.log = append(r.log, LogEntry{
 			Index: idx,
 			Term:  int(e.Term),
@@ -102,17 +117,21 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 		})
 	}
 
-	// persist updated log to disk
+	// 6. Persist log
 	if r.logStore != nil {
 		if err := r.logStore.SaveAll(r.log); err != nil {
 			log.Printf("[raft] follower failed to persist log: %v", err)
 		}
 	}
 
-	// update commit index
+	// 7. Advance commit index
 	if int(req.LeaderCommit) > r.commitIndex {
 		last := len(r.log) - 1
-		r.commitIndex = min(int(req.LeaderCommit), last)
+		if int(req.LeaderCommit) < last {
+			r.commitIndex = int(req.LeaderCommit)
+		} else {
+			r.commitIndex = last
+		}
 	}
 
 	resp.Success = true
