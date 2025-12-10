@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/jerkeyray/mimori/internal/utils"
 )
 
 // Node represents each know peer in the cluster
@@ -68,46 +68,55 @@ func (c *Cluster) Stop() { close(c.stop) }
 
 // pingPeers performs a heartbeat check on all known peers
 func (c *Cluster) pingPeers() {
-    c.mu.Lock()
-    defer c.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-    for _, peer := range c.Peers {
-        // shift peer.Addr's port by +1 to reach the HTTP health endpoint
-        basePort := parsePort(peer.Addr)
-        httpPort := basePort + 1
-        url := fmt.Sprintf("http://127.0.0.1:%d/healthz", httpPort)
+	for _, peer := range c.Peers {
+		host, basePort := utils.ParseHostPort(peer.Addr)
+		if basePort == 0 {
+			// can't parse port, mark as dead
+			if peer.Alive {
+				log.Printf("[cluster] peer %s seems dead (bad addr)", peer.Addr)
+			}
+			peer.Alive = false
+			continue
+		}
 
-        ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-        req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-        resp, err := http.DefaultClient.Do(req)
-        cancel()
+		// If host is empty (addr like ":4000"), assume peer is on localhost.
+		if host == "" {
+			host = "127.0.0.1"
+		}
 
-        if err == nil && resp.StatusCode == http.StatusOK {
-            if !peer.Alive {
-                log.Printf("[cluster] peer %s is now alive", peer.Addr)
-            }
-            peer.Alive = true
-            peer.LastOK = time.Now()
-            _ = resp.Body.Close()
-        } else {
-            if peer.Alive {
-                log.Printf("[cluster] peer %s seems dead", peer.Addr)
-            }
-            peer.Alive = false
-        }
-    }
+		httpPort := basePort + 1
+		url := fmt.Sprintf("http://%s:%d/healthz", host, httpPort)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+
+		if err == nil {
+			// ensure body closed in every case
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if resp.StatusCode == http.StatusOK {
+				if !peer.Alive {
+					log.Printf("[cluster] peer %s is now alive", peer.Addr)
+				}
+				peer.Alive = true
+				peer.LastOK = time.Now()
+				continue
+			}
+		}
+
+		// any error or non-200 status => dead
+		if peer.Alive {
+			log.Printf("[cluster] peer %s seems dead", peer.Addr)
+		}
+		peer.Alive = false
+	}
 }
-
-// helper for parsing peer port
-func parsePort(addr string) int {
-    parts := strings.Split(addr, ":")
-    if len(parts) < 2 {
-        return 0
-    }
-    p, _ := strconv.Atoi(parts[len(parts)-1])
-    return p
-}
-
 
 // PeersStatus returns a snapshot of the current peer states.
 func (c *Cluster) PeersStatus() []Node {
