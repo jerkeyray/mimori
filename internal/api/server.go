@@ -89,7 +89,11 @@ func (s *Server) Get(ctx context.Context, req *kv.GetRequest) (*kv.GetResponse, 
 
 func (s *Server) Delete(ctx context.Context, req *kv.DeleteRequest) (*kv.DeleteResponse, error) {
 	if !s.raft.IsLeader() {
-		return nil, fmt.Errorf("not leader")
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"not leader, leader=%s",
+			s.raft.LeaderID(),
+		)
 	}
 
 	data := encodeDeleteCmd(req.Key)
@@ -99,7 +103,7 @@ func (s *Server) Delete(ctx context.Context, req *kv.DeleteRequest) (*kv.DeleteR
 		return nil, err
 	}
 
-	// block until commited and applied
+	// block until committed and applied
 	<-s.raft.AppliedWait(index)
 
 	return &kv.DeleteResponse{Deleted: true}, nil
