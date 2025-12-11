@@ -3,11 +3,11 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/jerkeyray/mimori/internal/logging"
 	"github.com/jerkeyray/mimori/internal/utils"
 )
 
@@ -60,7 +60,8 @@ func (c *Cluster) Start() {
 			}
 		}
 	}()
-	log.Printf("[cluster] started heartbeat routine with %d peers", len(c.Peers))
+	logger := logging.With().Str("component", "cluster").Int("peer_count", len(c.Peers)).Logger()
+	logger.Info().Msg("started heartbeat routine")
 }
 
 // Stop ends the heartbeat loop
@@ -76,7 +77,8 @@ func (c *Cluster) pingPeers() {
 		if basePort == 0 {
 			// can't parse port, mark as dead
 			if peer.Alive {
-				log.Printf("[cluster] peer %s seems dead (bad addr)", peer.Addr)
+				logger := logging.With().Str("component", "cluster").Str("peer", peer.Addr).Logger()
+				logger.Warn().Msg("peer seems dead (bad addr)")
 			}
 			peer.Alive = false
 			continue
@@ -102,7 +104,8 @@ func (c *Cluster) pingPeers() {
 			}
 			if resp.StatusCode == http.StatusOK {
 				if !peer.Alive {
-					log.Printf("[cluster] peer %s is now alive", peer.Addr)
+					logger := logging.With().Str("component", "cluster").Str("peer", peer.Addr).Logger()
+					logger.Info().Msg("peer is now alive")
 				}
 				peer.Alive = true
 				peer.LastOK = time.Now()
@@ -112,7 +115,8 @@ func (c *Cluster) pingPeers() {
 
 		// any error or non-200 status => dead
 		if peer.Alive {
-			log.Printf("[cluster] peer %s seems dead", peer.Addr)
+			logger := logging.With().Str("component", "cluster").Str("peer", peer.Addr).Logger()
+			logger.Warn().Msg("peer seems dead")
 		}
 		peer.Alive = false
 	}

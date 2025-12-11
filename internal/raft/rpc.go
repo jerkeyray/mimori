@@ -2,9 +2,9 @@ package raft
 
 import (
 	"context"
-	"log"
 	"time"
 
+	"github.com/jerkeyray/mimori/internal/logging"
 	raftpb "github.com/jerkeyray/mimori/internal/raft/raftpb"
 )
 
@@ -141,7 +141,8 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 	// 6. Persist log
 	if r.logStore != nil {
 		if err := r.logStore.SaveAll(r.log); err != nil {
-			log.Printf("[raft] follower failed to persist log: %v", err)
+			logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+				Err(err).Msg("follower failed to persist log")
 		}
 	}
 
@@ -187,7 +188,9 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 	}
 
 	if err := r.snapshotStore.Save(snap); err != nil {
-		log.Printf("[raft] snapshot save failed: %v", err)
+		logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+			Err(err).Int("last_included_index", snap.LastIncludedIndex).
+			Msg("snapshot save failed")
 	}
 
 	r.snapshot = snap
@@ -207,7 +210,8 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 	r.logBaseIndex = snap.LastIncludedIndex
 
 	if err := r.logStore.SaveAll(r.log); err != nil {
-		log.Printf("[raft] failed to persist log after snapshot install: %v", err)
+		logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+			Err(err).Msg("failed to persist log after snapshot install")
 	}
 
 	// Update progress indices
@@ -216,7 +220,9 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 
 	if r.restorer != nil {
 		if err := r.restorer(snap.Data); err != nil {
-			log.Printf("[raft] snapshot restore failed: %v", err)
+			logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+				Err(err).Int("last_included_index", snap.LastIncludedIndex).
+				Msg("snapshot restore failed")
 			metricRPCErrorsTotal.WithLabelValues(string(r.id), "install_snapshot", "restore_failed").Inc()
 		}
 	}

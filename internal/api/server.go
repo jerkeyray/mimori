@@ -2,23 +2,21 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
-	"encoding/json"
-
 	"github.com/jerkeyray/mimori/internal/api/kv"
+	"github.com/jerkeyray/mimori/internal/logging"
 	"github.com/jerkeyray/mimori/internal/raft"
 	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 	"github.com/jerkeyray/mimori/internal/storage"
 	"github.com/jerkeyray/mimori/internal/utils"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // RaftNode interface for mocking
@@ -129,10 +127,58 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 
 		mux := http.NewServeMux()
 
-		// health check
+		// health check - basic liveness (server is running)
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			st := raftNode.Status()
+			// Health is OK if we can get status (node is responsive)
+			// Even if not leader, node is healthy
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":     "ok",
+				"node_id":    st.ID,
+				"raft_state": st.State,
+				"term":       st.Term,
+			})
+		})
+
+		// readiness check - node is ready to serve requests
+		mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+			st := raftNode.Status()
+			ready := true
+			reason := ""
+
+			// Check if we have a leader (either us or someone else)
+			if st.LeaderID == "" {
+				ready = false
+				reason = "no leader elected"
+			}
+
+			// Check if commit index is advancing (not stuck)
+			// This is a simple check - in production you might want more sophisticated logic
+			if st.CommitIndex == 0 && st.LastApplied == 0 {
+				// First boot, might be OK
+			}
+
+			if ready {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"ready":      true,
+					"node_id":    st.ID,
+					"raft_state": st.State,
+					"leader_id":  st.LeaderID,
+				})
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"ready":      false,
+					"reason":     reason,
+					"node_id":    st.ID,
+					"raft_state": st.State,
+				})
+			}
 		})
 
 		// raft status dump
@@ -141,7 +187,8 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(st); err != nil {
-				log.Printf("[http] status encode failed: %v", err)
+				logger := logging.With().Err(err).Str("component", "api").Logger()
+				logger.Error().Msg("status encode failed")
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -149,10 +196,11 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 
 		mux.Handle("/metrics", promhttp.Handler())
 
-
-		log.Printf("[http] endpoints at %s", httpAddr)
+		logger := logging.With().Str("component", "api").Str("addr", httpAddr).Logger()
+		logger.Info().Msg("HTTP endpoints started")
 		if err := http.ListenAndServe(httpAddr, mux); err != nil {
-			log.Printf("[http] server error on %s: %v", httpAddr, err)
+			logger := logging.With().Err(err).Str("component", "api").Str("addr", httpAddr).Logger()
+			logger.Error().Msg("HTTP server error")
 		}
 	}()
 

@@ -2,12 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"strings"
 
 	"github.com/jerkeyray/mimori/internal/api"
 	"github.com/jerkeyray/mimori/internal/cluster"
+	"github.com/jerkeyray/mimori/internal/logging"
 	"github.com/jerkeyray/mimori/internal/raft"
 	"github.com/jerkeyray/mimori/internal/storage"
 )
@@ -24,7 +24,8 @@ func main() {
 	// open pebble DB
 	store, err := storage.Open(dataDir)
 	if err != nil {
-		log.Fatalf("failed to open storage: %v", err)
+		logger := logging.With().Err(err).Str("data_dir", dataDir).Logger()
+		logger.Fatal().Msg("failed to open storage")
 	}
 	defer store.Close()
 
@@ -38,21 +39,25 @@ func main() {
 		for entry := range raftNode.ApplyCh() {
 			var cmd raft.Command
 			if err := json.Unmarshal(entry.Data, &cmd); err != nil {
-				log.Printf("failed to decode raft command: %v", err)
+				logger := logging.With().Err(err).Int("index", entry.Index).Logger()
+				logger.Error().Msg("failed to decode raft command")
 				continue
 			}
 
 			switch cmd.Op {
 			case raft.CmdPut:
 				if err := store.Put(cmd.Key, cmd.Value); err != nil {
-					log.Printf("apply PUT failed: %v", err)
+					logger := logging.With().Err(err).Str("key", string(cmd.Key)).Logger()
+					logger.Error().Msg("apply PUT failed")
 				}
 			case raft.CmdDelete:
 				if err := store.Delete(cmd.Key); err != nil {
-					log.Printf("apply DELETE failed: %v", err)
+					logger := logging.With().Err(err).Str("key", string(cmd.Key)).Logger()
+					logger.Error().Msg("apply DELETE failed")
 				}
 			default:
-				log.Printf("unknown command op: %v", cmd.Op)
+				logger := logging.With().Int("op", int(cmd.Op)).Logger()
+				logger.Warn().Msg("unknown command op")
 			}
 		}
 	}()
@@ -65,7 +70,8 @@ func main() {
 	// start the gRPC server and wait for connection calls
 	// pass the initialized store and raft node into the API layer
 	if err := api.ListenAndServe(addr, store, raftNode); err != nil {
-		log.Fatalf("server error: %v", err)
+		logger := logging.With().Err(err).Str("addr", addr).Logger()
+		logger.Fatal().Msg("server error")
 	}
 }
 

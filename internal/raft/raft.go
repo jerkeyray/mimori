@@ -3,13 +3,13 @@ package raft
 import (
 	"errors"
 	"io"
-	"log"
 	"math/rand"
 	"path"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/jerkeyray/mimori/internal/logging"
 	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 )
 
@@ -92,7 +92,8 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 
 	entries, err := logStore.Load()
 	if err != nil {
-		log.Printf("[raft] failed to load log: %v", err)
+		logger := logging.With().Err(err).Str("component", "raft").Logger()
+		logger.Error().Msg("failed to load log")
 	}
 
 	if len(entries) == 0 {
@@ -240,7 +241,8 @@ func (r *Raft) createSnapshotLocked() {
 
 	stateBytes, err := r.snapshotter()
 	if err != nil {
-		log.Printf("[raft] snapshotter error: %v", err)
+		logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+			Err(err).Msg("snapshotter error")
 		return
 	}
 
@@ -252,7 +254,9 @@ func (r *Raft) createSnapshotLocked() {
 	}
 
 	if err := r.snapshotStore.Save(snap); err != nil {
-		log.Printf("[raft] failed save snapshot: %v", err)
+		logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+			Err(err).Int("last_included_index", snap.LastIncludedIndex).
+			Msg("failed to save snapshot")
 		return
 	}
 
@@ -352,7 +356,8 @@ func (r *Raft) startElectionLocked() {
 	}
 
 	go r.broadcastRequestVote(r.term)
-	log.Printf("[raft] %s starting election %d", r.id, r.term)
+	logging.WithRaftContext(string(r.id), r.term, "candidate").
+		Info().Msg("starting election")
 }
 
 func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
@@ -481,7 +486,8 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 	})
 
 	if err := r.logStore.SaveAll(r.log); err != nil {
-		log.Printf("[raft] log persist failed: %v", err)
+		logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+			Err(err).Msg("log persist failed")
 	}
 
 	metricProposalsTotal.WithLabelValues(string(r.id), "success").Inc()
