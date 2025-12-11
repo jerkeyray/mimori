@@ -40,6 +40,7 @@ func (r *Raft) broadcastRequestVote(term int) {
 				LastLogTerm:  int32(lastTerm),
 			})
 			if err != nil {
+				metricRPCErrorsTotal.WithLabelValues(string(r.id), "request_vote", "rpc_error").Inc()
 				return
 			}
 
@@ -122,6 +123,7 @@ func (r *Raft) sendHeartbeats() {
 				LeaderCommit: int32(freshCommit),
 			})
 			if err != nil {
+				metricRPCErrorsTotal.WithLabelValues(string(leaderID), "append_entries", "rpc_error").Inc()
 				return
 			}
 
@@ -220,13 +222,20 @@ func (r *Raft) sendSnapshotToFollower(p NodeID) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	_, _ = client.InstallSnapshot(ctx, &raftpb.InstallSnapshotRequest{
+	start := time.Now()
+	_, err = client.InstallSnapshot(ctx, &raftpb.InstallSnapshotRequest{
 		Term:              int32(r.term),
 		LeaderId:          string(r.id),
 		LastIncludedIndex: int32(snap.LastIncludedIndex),
 		LastIncludedTerm:  int32(snap.LastIncludedTerm),
 		Data:              snap.Data,
 	})
+	duration := time.Since(start).Seconds()
+	metricRPCInstallSnapshotDuration.WithLabelValues(string(r.id), string(p)).Observe(duration)
+
+	if err != nil {
+		metricRPCErrorsTotal.WithLabelValues(string(r.id), "install_snapshot", "rpc_error").Inc()
+	}
 
 	r.mu.Lock()
 	r.matchIndex[p] = snap.LastIncludedIndex

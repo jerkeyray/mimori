@@ -8,3 +8,13 @@ data3/
 MANIFEST-*
 OPTIONS-*
 CURRENT
+
+# Go build / test artifacts
+*.test
+*.out
+*.prof
+*.exe
+*.dll
+*.so
+.gocache/
+bin/

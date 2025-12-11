@@ -18,6 +18,7 @@ import (
 	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 	"github.com/jerkeyray/mimori/internal/storage"
 	"github.com/jerkeyray/mimori/internal/utils"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // RaftNode interface for mocking
@@ -145,6 +146,9 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 				return
 			}
 		})
+
+		mux.Handle("/metrics", promhttp.Handler())
+
 
 		log.Printf("[http] endpoints at %s", httpAddr)
 		if err := http.ListenAndServe(httpAddr, mux); err != nil {

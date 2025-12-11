@@ -9,6 +9,12 @@ import (
 )
 
 func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) (*raftpb.RequestVoteResponse, error) {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metricRPCRequestVoteDuration.WithLabelValues(string(r.id), req.CandidateId).Observe(duration)
+	}()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -62,6 +68,12 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 }
 
 func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesRequest) (*raftpb.AppendEntriesResponse, error) {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metricRPCAppendEntriesDuration.WithLabelValues(string(r.id), req.LeaderId).Observe(duration)
+	}()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -205,8 +217,10 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 	if r.restorer != nil {
 		if err := r.restorer(snap.Data); err != nil {
 			log.Printf("[raft] snapshot restore failed: %v", err)
+			metricRPCErrorsTotal.WithLabelValues(string(r.id), "install_snapshot", "restore_failed").Inc()
 		}
 	}
 
+	metricSnapshotsInstalled.WithLabelValues(string(r.id)).Inc()
 	return resp, nil
 }

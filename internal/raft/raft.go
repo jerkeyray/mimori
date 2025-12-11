@@ -155,6 +155,7 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 
 	go r.runElectionTimer()
 	go r.runApplier()
+	go r.runMetricsUpdater()
 
 	return r
 }
@@ -273,6 +274,8 @@ func (r *Raft) createSnapshotLocked() {
 	r.log = newLog
 	r.logBaseIndex = snap.LastIncludedIndex
 	_ = r.logStore.SaveAll(r.log)
+
+	metricSnapshotsCreated.WithLabelValues(string(r.id)).Inc()
 }
 
 // ForceSnapshot lets tests trigger a snapshot immediately.
@@ -435,6 +438,7 @@ func (r *Raft) runApplier() {
 			r.mu.Unlock()
 
 			r.applyCh <- entry
+			metricAppliedTotal.WithLabelValues(string(r.id)).Inc()
 
 			r.mu.Lock()
 			if ch, ok := r.waiters[r.lastApplied]; ok {
@@ -464,6 +468,7 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 	defer r.mu.Unlock()
 
 	if r.state != Leader {
+		metricProposalsTotal.WithLabelValues(string(r.id), "not_leader").Inc()
 		return 0, ErrNotLeader
 	}
 
@@ -479,6 +484,7 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 		log.Printf("[raft] log persist failed: %v", err)
 	}
 
+	metricProposalsTotal.WithLabelValues(string(r.id), "success").Inc()
 	return index, nil
 }
 
@@ -541,6 +547,8 @@ func (r *Raft) Status() Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.updateMetrics() // Update metrics whenever status is queried
+
 	return Status{
 		ID:          string(r.id),
 		State:       r.state.String(),
@@ -580,6 +588,23 @@ func (s RaftState) String() string {
 
 func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, io.Closer, error)) {
 	r.dialer = d
+}
+
+// runMetricsUpdater periodically updates Prometheus metrics
+func (r *Raft) runMetricsUpdater() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.shutdownCh:
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			r.updateMetrics()
+			r.mu.Unlock()
+		}
+	}
 }
 
 // Stop signals all internal goroutines to exit.
