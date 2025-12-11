@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -47,6 +48,9 @@ to a MimoriDB node running locally or remotely.`,
 		newDelCmd(),
 		newHealthCmd(),
 		newStatusCmd(),
+		newSnapshotCmd(),
+		newMetricsCmd(),
+		newLeaderCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -270,20 +274,144 @@ func mustConnectTo(a string) *clientWrapper {
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show Raft and node status for debugging",
+		Short: "Show Raft and node status",
+		Long:  "Display detailed Raft status including node ID, state, term, commit index, and log length",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
+			httpPort := getHTTPPort()
+			url := fmt.Sprintf("http://%s:%d/raft/status", getHTTPHost(), httpPort)
 
-			// build HTTP URL: if grpc is :4000, health/status is :4001
-			host, port, ok := strings.Cut(addr, ":")
-			if !ok {
-				log.Fatalf("invalid addr: %s", addr)
+			client := http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Get(url)
+			if err != nil {
+				log.Fatalf("failed to fetch status: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				log.Fatalf("status check failed: %s", string(body))
 			}
 
-			httpPort := portToInt(port) + 1
-			url := fmt.Sprintf("http://%s:%d/raft/status", host, httpPort)
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Fatalf("failed to read response: %v", err)
+			}
 
-			// do HTTP GET
+			// Pretty print JSON
+			var status map[string]interface{}
+			if err := json.Unmarshal(body, &status); err != nil {
+				fmt.Println(string(body))
+				return
+			}
+
+			fmt.Printf("Node ID:      %v\n", status["id"])
+			fmt.Printf("State:        %v\n", status["state"])
+			fmt.Printf("Term:         %v\n", status["term"])
+			fmt.Printf("Leader ID:    %v\n", status["leader_id"])
+			fmt.Printf("Commit Index: %v\n", status["commit_index"])
+			fmt.Printf("Last Applied: %v\n", status["last_applied"])
+			fmt.Printf("Log Length:   %v\n", status["log_length"])
+		},
+	}
+}
+
+func newSnapshotCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "snapshot",
+		Short: "Force creation of a snapshot",
+		Long:  "Trigger snapshot creation on the leader node. This compacts the log and creates a checkpoint.",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			httpPort := getHTTPPort()
+			url := fmt.Sprintf("http://%s:%d/raft/snapshot", getHTTPHost(), httpPort)
+
+			client := http.Client{Timeout: 5 * time.Second}
+			req, _ := http.NewRequest(http.MethodPost, url, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Fatalf("failed to create snapshot: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Fatalf("failed to read response: %v", err)
+			}
+
+			if resp.StatusCode == http.StatusPreconditionFailed {
+				var result map[string]interface{}
+				json.Unmarshal(body, &result)
+				log.Fatalf("snapshot failed: %v (leader is %v)", result["error"], result["leader_id"])
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				log.Fatalf("snapshot failed: %s", string(body))
+			}
+
+			fmt.Println("Snapshot created successfully")
+		},
+	}
+}
+
+func newMetricsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "metrics",
+		Short: "Show key Prometheus metrics",
+		Long:  "Display important Raft metrics in a readable format",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			httpPort := getHTTPPort()
+			url := fmt.Sprintf("http://%s:%d/metrics", getHTTPHost(), httpPort)
+
+			client := http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Get(url)
+			if err != nil {
+				log.Fatalf("failed to fetch metrics: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Fatalf("failed to read response: %v", err)
+			}
+
+			// Parse Prometheus metrics and show key ones
+			lines := strings.Split(string(body), "\n")
+			keyMetrics := []string{
+				"raft_node_is_leader",
+				"raft_term",
+				"raft_commit_index",
+				"raft_last_applied_index",
+				"raft_log_length",
+				"raft_proposals_total",
+				"raft_applied_total",
+				"raft_snapshots_created_total",
+			}
+
+			fmt.Println("Key Raft Metrics:")
+			fmt.Println("==================")
+			for _, line := range lines {
+				for _, metric := range keyMetrics {
+					if strings.HasPrefix(line, metric) && !strings.HasPrefix(line, "#") {
+						fmt.Println(line)
+						break
+					}
+				}
+			}
+		},
+	}
+}
+
+func newLeaderCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "leader",
+		Short: "Show current leader information",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			httpPort := getHTTPPort()
+			url := fmt.Sprintf("http://%s:%d/raft/status", getHTTPHost(), httpPort)
+
 			client := http.Client{Timeout: 2 * time.Second}
 			resp, err := client.Get(url)
 			if err != nil {
@@ -296,7 +424,25 @@ func newStatusCmd() *cobra.Command {
 				log.Fatalf("failed to read response: %v", err)
 			}
 
-			fmt.Println(string(body))
+			var status map[string]interface{}
+			if err := json.Unmarshal(body, &status); err != nil {
+				log.Fatalf("failed to parse status: %v", err)
+			}
+
+			leaderID := status["leader_id"]
+			if leaderID == "" {
+				fmt.Println("No leader elected")
+				return
+			}
+
+			isLeader := status["state"] == "leader"
+			fmt.Printf("Leader ID: %v\n", leaderID)
+			if isLeader {
+				fmt.Printf("This node (%v) is the leader\n", status["id"])
+			} else {
+				fmt.Printf("This node (%v) is a follower\n", status["id"])
+			}
+			fmt.Printf("Term: %v\n", status["term"])
 		},
 	}
 }
@@ -307,4 +453,24 @@ func portToInt(p string) int {
 		log.Fatalf("invalid port: %s", p)
 	}
 	return n
+}
+
+// Helper functions for HTTP endpoints
+func getHTTPHost() string {
+	host, _, ok := strings.Cut(addr, ":")
+	if !ok {
+		return "127.0.0.1"
+	}
+	if host == "" {
+		return "127.0.0.1"
+	}
+	return host
+}
+
+func getHTTPPort() int {
+	_, port, ok := strings.Cut(addr, ":")
+	if !ok {
+		log.Fatalf("invalid addr format: %s", addr)
+	}
+	return portToInt(port) + 1
 }

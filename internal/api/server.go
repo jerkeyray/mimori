@@ -194,6 +194,35 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 			}
 		})
 
+		// force snapshot creation (admin endpoint)
+		mux.HandleFunc("/raft/snapshot", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			// Only leader can create snapshots
+			if !raftNode.IsLeader() {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":     "not leader",
+					"leader_id": string(raftNode.LeaderID()),
+				})
+				return
+			}
+
+			// Force snapshot (raftNode is already *raft.Raft, no type assertion needed)
+			raftNode.ForceSnapshot()
+			st := raftNode.Status()
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":      "ok",
+				"message":     "snapshot created",
+				"raft_status": st,
+			})
+		})
+
 		mux.Handle("/metrics", promhttp.Handler())
 
 		logger := logging.With().Str("component", "api").Str("addr", httpAddr).Logger()
