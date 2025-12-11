@@ -1,0 +1,4 @@
+./diff.go
+./formatter.go
+./pretty.go
+./zero.go

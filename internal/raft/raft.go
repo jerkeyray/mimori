@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"io"
 	"log"
 	"math/rand"
 	"path"
@@ -9,8 +10,7 @@ import (
 	"sync"
 	"time"
 
-	raftpb "github.com/jerkeyray/mimori/internal/raft/raftpb"
-	"google.golang.org/grpc"
+	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 )
 
 // RaftState represents what role a node is in
@@ -22,68 +22,101 @@ const (
 	Leader
 )
 
-// node address
+// snapshotCheckThreshold controls when the leader will attempt a snapshot
+// based on applied entries. Kept small for tests; tune for production loads.
+const snapshotCheckThreshold = 50
+
 type NodeID string
 
-// Raft holds the consensus state for a mimori node
+// Snapshot callbacks provided by KV layer
+type Snapshotter func() ([]byte, error)
+type SnapshotRestorer func([]byte) error
+
+// Raft holds the consensus state
 type Raft struct {
-	raftpb.UnimplementedRaftServer // REQUIRED for gRPC server interface
-	mu                             sync.Mutex
+	raftpb.UnimplementedRaftServer
+	mu sync.Mutex
 
-	id    NodeID   // our address, e.g. ":4000"
-	peers []NodeID // other nodes
+	id    NodeID
+	peers []NodeID
 
-	state    RaftState // follower, candidate, leader
-	term     int       // current term
+	state    RaftState
+	term     int
 	votes    int
-	votedFor NodeID // who we voted for
+	votedFor NodeID
 
-	// timers
 	electionReset time.Time
 
 	log         []LogEntry
 	commitIndex int
 	lastApplied int
 
-	// for leaders: per follower progress
 	nextIndex  map[NodeID]int
 	matchIndex map[NodeID]int
 
-	// channel to delvier commited entries to the state machine
 	applyCh chan LogEntry
 
-	waiters map[int]chan struct{} // waiting clients get notified when entry is applied
+	waiters map[int]chan struct{}
 
 	leader NodeID
 
 	meta     *MetaStore
 	logStore *LogStore
 
-	// injectable transport for testing
-	dialer func(addr string) (raftpb.RaftClient, *grpc.ClientConn, error)
+	logBaseIndex int
+	stopOnce     sync.Once
+
+	dialer func(addr string) (raftpb.RaftClient, io.Closer, error)
 
 	shutdownCh chan struct{}
+
+	snapshotStore *SnapshotStore
+	snapshot      *Snapshot
+
+	snapshotter Snapshotter
+	restorer    SnapshotRestorer
 }
 
-// create a new Raft instance and start election timer in the background
+// -----------------------------------------------------------------------------
+// Constructor
+// -----------------------------------------------------------------------------
+
 func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 	metaPath := path.Join(dataDir, "raft-meta.json")
 	meta := NewMetaStore(metaPath)
 
 	term, votedFor, _ := meta.Load()
 
-	// log file for raft log
 	logPath := filepath.Join(dataDir, "raft-log.json")
 	logStore := NewLogStore(logPath)
 
 	entries, err := logStore.Load()
 	if err != nil {
-		log.Printf("[raft] failed to load log from disk: %v", err)
+		log.Printf("[raft] failed to load log: %v", err)
 	}
 
-	log := entries
-	if len(log) == 0 {
-		log = []LogEntry{{Index: 0, Term: 0, Data: nil}}
+	if len(entries) == 0 {
+		entries = []LogEntry{{Index: 0, Term: 0, Data: nil}}
+	}
+
+	snapStore := NewSnapshotStore(filepath.Join(dataDir, "raft-snap.json"))
+	snap, _ := snapStore.Load()
+
+	// Align log base index with snapshot if present
+	logBaseIndex := entries[0].Index
+	if snap != nil {
+		logBaseIndex = snap.LastIncludedIndex
+
+		if len(entries) == 0 || entries[0].Index != snap.LastIncludedIndex {
+			entries = append([]LogEntry{{
+				Index: snap.LastIncludedIndex,
+				Term:  snap.LastIncludedTerm,
+				Data:  nil,
+			}}, entries...)
+		} else {
+			entries[0].Index = snap.LastIncludedIndex
+			entries[0].Term = snap.LastIncludedTerm
+		}
 	}
 
 	r := &Raft{
@@ -93,20 +126,31 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 		term:          term,
 		votedFor:      votedFor,
 		electionReset: time.Now(),
-		log:           entries,
-		nextIndex:     make(map[NodeID]int),
-		matchIndex:    make(map[NodeID]int),
-		applyCh:       make(chan LogEntry, 128),
-		waiters:       make(map[int]chan struct{}),
-		leader:        "",
+
+		log: entries,
+
+		nextIndex:    make(map[NodeID]int),
+		matchIndex:   make(map[NodeID]int),
+		applyCh:      make(chan LogEntry, 128),
+		waiters:      make(map[int]chan struct{}),
+		logBaseIndex: logBaseIndex,
+
 		meta:          meta,
 		logStore:      logStore,
 		shutdownCh:    make(chan struct{}),
+		snapshotStore: snapStore,
+		snapshot:      snap,
 	}
 
 	for _, p := range peers {
-		r.nextIndex[p] = 1
+		r.nextIndex[p] = r.lastLogIndex() + 1
 		r.matchIndex[p] = 0
+	}
+
+	// If snapshot exists, Raft indexes must start from it
+	if snap != nil {
+		r.commitIndex = snap.LastIncludedIndex
+		r.lastApplied = snap.LastIncludedIndex
 	}
 
 	go r.runElectionTimer()
@@ -115,22 +159,160 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 	return r
 }
 
-func (r *Raft) Stop() {
-	close(r.shutdownCh)
+// -----------------------------------------------------------------------------
+// Snapshot Callback Wiring
+// -----------------------------------------------------------------------------
+
+func (r *Raft) SetSnapshotter(s Snapshotter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshotter = s
 }
 
+func (r *Raft) SetSnapshotRestorer(rst SnapshotRestorer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.restorer = rst
+}
+
+// -----------------------------------------------------------------------------
+// Log index helpers (handle compaction offsets)
+// -----------------------------------------------------------------------------
+
+func (r *Raft) lastLogIndex() int {
+	if len(r.log) == 0 {
+		return r.logBaseIndex
+	}
+	return r.log[len(r.log)-1].Index
+}
+
+func (r *Raft) lastLogTerm() int {
+	if len(r.log) == 0 {
+		return 0
+	}
+	return r.log[len(r.log)-1].Term
+}
+
+// entryAt returns the log entry with the given absolute index if present.
+func (r *Raft) entryAt(idx int) (LogEntry, bool) {
+	if len(r.log) == 0 {
+		return LogEntry{}, false
+	}
+	if idx < r.logBaseIndex {
+		return LogEntry{}, false
+	}
+	offset := idx - r.logBaseIndex
+	if offset < 0 || offset >= len(r.log) {
+		return LogEntry{}, false
+	}
+	return r.log[offset], true
+}
+
+// sliceFrom returns entries starting at absolute index `from` (inclusive).
+func (r *Raft) sliceFrom(from int) []LogEntry {
+	if from < r.logBaseIndex {
+		from = r.logBaseIndex
+	}
+	start := from - r.logBaseIndex
+	if start < 0 || start >= len(r.log) {
+		return nil
+	}
+	out := make([]LogEntry, len(r.log)-start)
+	copy(out, r.log[start:])
+	return out
+}
+
+// -----------------------------------------------------------------------------
+// Snapshot Creation (Leader Only)
+// -----------------------------------------------------------------------------
+
+func (r *Raft) createSnapshotLocked() {
+	if r.snapshotter == nil {
+		// app didn't register snapshot hook
+		return
+	}
+
+	entry, ok := r.entryAt(r.lastApplied)
+	if r.lastApplied < 0 || !ok {
+		return
+	}
+
+	stateBytes, err := r.snapshotter()
+	if err != nil {
+		log.Printf("[raft] snapshotter error: %v", err)
+		return
+	}
+
+	snap := &Snapshot{
+		LastIncludedIndex: r.lastApplied,
+		LastIncludedTerm:  entry.Term,
+		CreatedAt:         time.Now().Unix(),
+		Data:              stateBytes,
+	}
+
+	if err := r.snapshotStore.Save(snap); err != nil {
+		log.Printf("[raft] failed save snapshot: %v", err)
+		return
+	}
+
+	r.snapshot = snap
+
+	// Compact log — keep dummy entry at snapshot boundary
+	newLog := []LogEntry{{
+		Index: snap.LastIncludedIndex,
+		Term:  snap.LastIncludedTerm,
+		Data:  nil,
+	}}
+
+	for _, e := range r.log {
+		if e.Index > r.lastApplied {
+			newLog = append(newLog, e)
+		}
+	}
+
+	r.log = newLog
+	r.logBaseIndex = snap.LastIncludedIndex
+	_ = r.logStore.SaveAll(r.log)
+}
+
+// ForceSnapshot lets tests trigger a snapshot immediately.
+func (r *Raft) ForceSnapshot() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.createSnapshotLocked()
+}
+
+// -----------------------------------------------------------------------------
+// Query Helpers
+// -----------------------------------------------------------------------------
+
+func (r *Raft) IsLeader() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == Leader
+}
+
+func (r *Raft) LeaderID() NodeID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.leader
+}
+
+func (r *Raft) ApplyCh() <-chan LogEntry { return r.applyCh }
+
+// -----------------------------------------------------------------------------
+// Election & Heartbeat Logic (unchanged from your base version)
+// -----------------------------------------------------------------------------
+
 func (r *Raft) randomElectionTimeout() time.Duration {
-	// between 150ms and 300ms
 	return time.Duration(150+rand.Intn(150)) * time.Millisecond
 }
 
 func (r *Raft) runElectionTimer() {
-	// check every 50ms
-	// if leader continue - no timeout
-	// if no heartbeat heard in a while, start new election
-	timeout := r.randomElectionTimeout()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+
+	timeout := r.randomElectionTimeout()
 
 	for {
 		select {
@@ -141,14 +323,11 @@ func (r *Raft) runElectionTimer() {
 
 		r.mu.Lock()
 		if r.state == Leader {
-			// leaders don't time out
 			r.mu.Unlock()
 			continue
 		}
 
-		// time since last heartbeat or vote
 		if time.Since(r.electionReset) >= timeout {
-			// become candidate
 			r.startElectionLocked()
 			timeout = r.randomElectionTimeout()
 		}
@@ -156,29 +335,27 @@ func (r *Raft) runElectionTimer() {
 	}
 }
 
-// node becomes a candidate and vote for yourself
 func (r *Raft) startElectionLocked() {
 	r.state = Candidate
 	r.term++
 	r.votedFor = r.id
 	r.meta.Save(r.term, r.votedFor)
 	r.electionReset = time.Now()
-	r.votes = 1 // we vote for ourselves
+	r.votes = 1
+
 	if r.votes > len(r.peers)/2 {
 		r.becomeLeaderLocked()
 		return
 	}
 
 	go r.broadcastRequestVote(r.term)
-
-	log.Printf("[raft] %s starting election for term %d", r.id, r.term)
+	log.Printf("[raft] %s starting election %d", r.id, r.term)
 }
 
 func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// if someone else has a higher term, revert to follower
 	if int(resp.Term) > r.term {
 		r.term = int(resp.Term)
 		r.state = Follower
@@ -190,7 +367,6 @@ func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 		return
 	}
 
-	// if majority votes received, become leader
 	if resp.VoteGranted {
 		r.votes++
 		if r.votes > len(r.peers)/2 {
@@ -202,27 +378,24 @@ func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 func (r *Raft) becomeLeaderLocked() {
 	r.state = Leader
 	r.leader = r.id
-	log.Printf("[raft] %s became leader for term %d", r.id, r.term)
 
-	// reset follower progress
-	// on fresh leadership, assume followers might be behind
-	lastIdx := len(r.log)
+	lastIdx := r.lastLogIndex() + 1
 	for _, p := range r.peers {
-		r.nextIndex[p] = lastIdx // send log starting from here
-		r.matchIndex[p] = 0      // nothing confirmed yet
+		r.nextIndex[p] = lastIdx
+		r.matchIndex[p] = r.logBaseIndex
 	}
 
-	// become leader and start pulsing heartbeats every 75 ms
 	go func() {
-		ticker := time.NewTicker(75 * time.Millisecond)
-		defer ticker.Stop()
+		t := time.NewTicker(75 * time.Millisecond)
+		defer t.Stop()
 
 		for {
 			select {
 			case <-r.shutdownCh:
 				return
-			case <-ticker.C:
+			case <-t.C:
 			}
+
 			r.mu.Lock()
 			if r.state != Leader {
 				r.mu.Unlock()
@@ -235,24 +408,10 @@ func (r *Raft) becomeLeaderLocked() {
 	}()
 }
 
-func (r *Raft) IsLeader() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.state == Leader
-}
+// -----------------------------------------------------------------------------
+// Applier Loop
+// -----------------------------------------------------------------------------
 
-func (r *Raft) LeaderID() NodeID {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return r.leader
-}
-
-func (r *Raft) ApplyCh() <-chan LogEntry {
-	return r.applyCh
-}
-
-// push the commited log entries to the DB node
 func (r *Raft) runApplier() {
 	for {
 		select {
@@ -263,24 +422,40 @@ func (r *Raft) runApplier() {
 
 		r.mu.Lock()
 		for r.commitIndex > r.lastApplied {
-			r.lastApplied++
-			entry := r.log[r.lastApplied]
+			nextIndex := r.lastApplied + 1
+			entry, ok := r.entryAt(nextIndex)
+			if !ok {
+				// we are likely waiting on a snapshot install; pause until available
+				r.mu.Unlock()
+				time.Sleep(5 * time.Millisecond)
+				r.mu.Lock()
+				continue
+			}
+			r.lastApplied = nextIndex
 			r.mu.Unlock()
 
-			// deliver to state machine
 			r.applyCh <- entry
-			r.mu.Lock()
 
-			// notify waiters
+			r.mu.Lock()
 			if ch, ok := r.waiters[r.lastApplied]; ok {
 				close(ch)
 				delete(r.waiters, r.lastApplied)
 			}
+
+			// Try snapshotting after every apply
+			if r.state == Leader && r.lastApplied-r.logBaseIndex >= snapshotCheckThreshold {
+				r.createSnapshotLocked()
+			}
 		}
 		r.mu.Unlock()
+
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Client Proposal
+// -----------------------------------------------------------------------------
 
 var ErrNotLeader = errors.New("not leader")
 
@@ -292,47 +467,40 @@ func (r *Raft) Propose(cmdData []byte) (int, error) {
 		return 0, ErrNotLeader
 	}
 
-	// append a new uncommited log entry
-	index := len(r.log)
-	entry := LogEntry{
+	index := r.lastLogIndex() + 1
+
+	r.log = append(r.log, LogEntry{
 		Index: index,
 		Term:  r.term,
 		Data:  cmdData,
-	}
+	})
 
-	// append to in-memory log
-	r.log = append(r.log, entry)
-
-	// persist full log to disk
-	if r.logStore != nil {
-		if err := r.logStore.SaveAll(r.log); err != nil {
-			log.Printf("[raft] failed to persist log: %v", err)
-		}
+	if err := r.logStore.SaveAll(r.log); err != nil {
+		log.Printf("[raft] log persist failed: %v", err)
 	}
 
 	return index, nil
 }
 
-// moves commitIndex forward if a majority
-// of nodes have replicated a given index
+// -----------------------------------------------------------------------------
+// Commit Advancement
+// -----------------------------------------------------------------------------
+
 func (r *Raft) updateCommitIndexLocked() {
 	if r.state != Leader {
 		return
 	}
 
-	// total nodes = followers + leader
-	totalNodes := len(r.peers) + 1
-	majority := (totalNodes / 2) + 1
+	total := len(r.peers) + 1
+	majority := total/2 + 1
 
-	// walk from the end of the log down to current commitIndex
-	for N := len(r.log) - 1; N > r.commitIndex; N-- {
-		count := 1 // leader always has its own log
-
-		// prevents committing old entries that could be overwritten
-		if r.log[N].Term != r.term {
+	for N := r.lastLogIndex(); N > r.commitIndex; N-- {
+		entry, ok := r.entryAt(N)
+		if !ok || entry.Term != r.term {
 			continue
 		}
 
+		count := 1 // self
 		for _, p := range r.peers {
 			if r.matchIndex[p] >= N {
 				count++
@@ -346,14 +514,14 @@ func (r *Raft) updateCommitIndexLocked() {
 	}
 }
 
-// returns channel that will be closed when the given
-// log index has been applied to the state machine
+// -----------------------------------------------------------------------------
+// Waiter
+// -----------------------------------------------------------------------------
 
 func (r *Raft) AppliedWait(index int) <-chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// if it's already applied, return closed channel
 	if index <= r.lastApplied {
 		ch := make(chan struct{})
 		close(ch)
@@ -365,32 +533,10 @@ func (r *Raft) AppliedWait(index int) <-chan struct{} {
 	return ch
 }
 
-// Status is a snapshot of the raft node state for debugging / observability.
-type Status struct {
-	ID          string `json:"id"`
-	State       string `json:"state"`
-	Term        int    `json:"term"`
-	LeaderID    string `json:"leader_id"`
-	CommitIndex int    `json:"commit_index"`
-	LastApplied int    `json:"last_applied"`
-	LogLength   int    `json:"log_length"`
-}
+// -----------------------------------------------------------------------------
+// Status
+// -----------------------------------------------------------------------------
 
-// helper to turn RaftState into string
-func (s RaftState) String() string {
-	switch s {
-	case Follower:
-		return "follower"
-	case Candidate:
-		return "candidate"
-	case Leader:
-		return "leader"
-	default:
-		return "unknown"
-	}
-}
-
-// Status returns a copy of the important raft state fields.
 func (r *Raft) Status() Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -406,8 +552,40 @@ func (r *Raft) Status() Status {
 	}
 }
 
-// SetDialer allows injecting a mock dialer for testing
-func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, *grpc.ClientConn, error)) {
-    r.dialer = d
+type Status struct {
+	ID          string `json:"id"`
+	State       string `json:"state"`
+	Term        int    `json:"term"`
+	LeaderID    string `json:"leader_id"`
+	CommitIndex int    `json:"commit_index"`
+	LastApplied int    `json:"last_applied"`
+	LogLength   int    `json:"log_length"`
 }
 
+func (s RaftState) String() string {
+	switch s {
+	case Follower:
+		return "follower"
+	case Candidate:
+		return "candidate"
+	case Leader:
+		return "leader"
+	}
+	return "unknown"
+}
+
+// -----------------------------------------------------------------------------
+// Testing Helpers
+// -----------------------------------------------------------------------------
+
+func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, io.Closer, error)) {
+	r.dialer = d
+}
+
+// Stop signals all internal goroutines to exit.
+// Safe to call multiple times.
+func (r *Raft) Stop() {
+	r.stopOnce.Do(func() {
+		close(r.shutdownCh)
+	})
+}

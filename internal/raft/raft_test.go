@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func (n *mockNetwork) register(r *Raft) {
 	defer n.mu.Unlock()
 	n.nodes[string(r.id)] = r
 
-	r.SetDialer(func(addr string) (raftpb.RaftClient, interface{ Close() error }, error) {
+	r.SetDialer(func(addr string) (raftpb.RaftClient, io.Closer, error) {
 		n.mu.Lock()
 		target, ok := n.nodes[addr]
 		n.mu.Unlock()
@@ -37,7 +38,7 @@ func (n *mockNetwork) register(r *Raft) {
 			return nil, nil, fmt.Errorf("node not found: %s", addr)
 		}
 
-		return &directClient{target: target}, &noOpCloser{}, nil
+		return &directClient{target: target}, io.Closer(&noOpCloser{}), nil
 	})
 }
 
@@ -51,6 +52,10 @@ func (c *directClient) RequestVote(ctx context.Context, in *raftpb.RequestVoteRe
 
 func (c *directClient) AppendEntries(ctx context.Context, in *raftpb.AppendEntriesRequest, opts ...grpc.CallOption) (*raftpb.AppendEntriesResponse, error) {
 	return c.target.AppendEntries(ctx, in)
+}
+
+func (c *directClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest, opts ...grpc.CallOption) (*raftpb.InstallSnapshotResponse, error) {
+	return c.target.InstallSnapshot(ctx, in)
 }
 
 // noOpCloser is a closer that does nothing
@@ -123,7 +128,7 @@ func TestRaft_Replication(t *testing.T) {
 				myPeers = append(myPeers, p)
 			}
 		}
-		
+
 		nodes[id] = New(id, myPeers, dirs[id])
 		net.register(nodes[id])
 	}
@@ -171,7 +176,7 @@ Loop:
 		if time.Since(start) > 2*time.Second {
 			t.Fatal("timed out waiting for followers to apply")
 		}
-		
+
 		appliedCount := 0
 		for _, n := range nodes {
 			st := n.Status()
@@ -179,10 +184,176 @@ Loop:
 				appliedCount++
 			}
 		}
-		
+
 		if appliedCount == len(peers) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func waitForLeader(t *testing.T, nodes ...*Raft) *Raft {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for leader election")
+		case <-ticker.C:
+			for _, n := range nodes {
+				if n.IsLeader() {
+					return n
+				}
+			}
+		}
+	}
+}
+
+func TestRaft_SnapshotCreation(t *testing.T) {
+	dir := t.TempDir()
+	id := NodeID("node-snap")
+	r := New(id, []NodeID{}, dir)
+
+	r.SetSnapshotter(func() ([]byte, error) {
+		return []byte("snap-state"), nil
+	})
+
+	leader := waitForLeader(t, r)
+
+	// Produce a handful of entries to apply
+	for i := 0; i < 5; i++ {
+		idx, err := leader.Propose([]byte(fmt.Sprintf("cmd-%d", i)))
+		if err != nil {
+			t.Fatalf("propose failed: %v", err)
+		}
+		select {
+		case <-leader.AppliedWait(idx):
+		case <-time.After(time.Second):
+			t.Fatalf("apply wait timeout for %d", idx)
+		}
+	}
+
+	leader.ForceSnapshot()
+
+	if leader.snapshot == nil {
+		t.Fatalf("snapshot not created")
+	}
+
+	if leader.logBaseIndex != leader.snapshot.LastIncludedIndex {
+		t.Fatalf("logBaseIndex %d != snap index %d", leader.logBaseIndex, leader.snapshot.LastIncludedIndex)
+	}
+
+	// Next proposal should continue absolute indexing
+	nextIdx, err := leader.Propose([]byte("post-snapshot"))
+	if err != nil {
+		t.Fatalf("propose after snapshot failed: %v", err)
+	}
+	expected := leader.snapshot.LastIncludedIndex + 1
+	if nextIdx != expected {
+		t.Fatalf("expected next index %d, got %d", expected, nextIdx)
+	}
+
+	select {
+	case <-leader.AppliedWait(nextIdx):
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for post-snapshot apply")
+	}
+
+	if leader.lastApplied != nextIdx {
+		t.Fatalf("lastApplied=%d expected=%d", leader.lastApplied, nextIdx)
+	}
+}
+
+func TestRaft_InstallSnapshotToFollower(t *testing.T) {
+	net := newMockNetwork()
+
+	leaderID := NodeID("leader")
+	followerID := NodeID("follower")
+
+	leaderDir := t.TempDir()
+	followerDir := t.TempDir()
+
+	leader := New(leaderID, []NodeID{followerID}, leaderDir)
+	follower := New(followerID, []NodeID{leaderID}, followerDir)
+
+	net.register(leader)
+	net.register(follower)
+
+	restoreCh := make(chan []byte, 1)
+	follower.SetSnapshotRestorer(func(data []byte) error {
+		restoreCh <- data
+		return nil
+	})
+
+	leader.SetSnapshotter(func() ([]byte, error) {
+		return []byte("restorable-state"), nil
+	})
+
+	electedLeader := waitForLeader(t, leader, follower)
+	if electedLeader != leader {
+		t.Fatalf("expected %s to become leader, got %s", leaderID, electedLeader.id)
+	}
+
+	// Append some entries and apply on both nodes
+	var lastIdx int
+	for i := 0; i < 5; i++ {
+		idx, err := leader.Propose([]byte(fmt.Sprintf("data-%d", i)))
+		if err != nil {
+			t.Fatalf("propose failed: %v", err)
+		}
+		lastIdx = idx
+		select {
+		case <-leader.AppliedWait(idx):
+		case <-time.After(time.Second):
+			t.Fatalf("timeout applying %d on leader", idx)
+		}
+	}
+
+	// Ensure follower catches up with normal replication
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		follower.mu.Lock()
+		applied := follower.lastApplied
+		follower.mu.Unlock()
+
+		if applied >= lastIdx {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("follower failed to replicate up to %d (got %d)", lastIdx, applied)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Force a snapshot on the leader
+	leader.ForceSnapshot()
+	if leader.snapshot == nil {
+		t.Fatalf("leader snapshot missing")
+	}
+
+	// Make the leader think follower is far behind
+	leader.mu.Lock()
+	leader.nextIndex[followerID] = leader.snapshot.LastIncludedIndex
+	leader.mu.Unlock()
+
+	leader.sendHeartbeats()
+
+	select {
+	case data := <-restoreCh:
+		if string(data) != "restorable-state" {
+			t.Fatalf("restored data mismatch: %s", string(data))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower did not receive snapshot")
+	}
+
+	follower.mu.Lock()
+	if follower.lastApplied != leader.snapshot.LastIncludedIndex {
+		t.Fatalf("follower lastApplied=%d expected=%d", follower.lastApplied, leader.snapshot.LastIncludedIndex)
+	}
+	follower.mu.Unlock()
 }

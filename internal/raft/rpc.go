@@ -31,8 +31,8 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 	}
 
 	// 3. Enforce Raft log up-to-date rule
-	myLastIndex := len(r.log) - 1
-	myLastTerm := r.log[myLastIndex].Term
+	myLastIndex := r.lastLogIndex()
+	myLastTerm := r.lastLogTerm()
 
 	candidateLastTerm := int(req.LastLogTerm)
 	candidateLastIndex := int(req.LastLogIndex)
@@ -87,9 +87,12 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 
 	// 4. Log consistency check
 	if req.PrevLogIndex > 0 {
-		idx := int(req.PrevLogIndex)
-
-		if idx >= len(r.log) || r.log[idx].Term != int(req.PrevLogTerm) {
+		if int(req.PrevLogIndex) < r.logBaseIndex {
+			resp.Success = false
+			return resp, nil
+		}
+		entry, ok := r.entryAt(int(req.PrevLogIndex))
+		if !ok || entry.Term != int(req.PrevLogTerm) {
 			// follower's log doesn't match leader's
 			resp.Success = false
 			return resp, nil
@@ -98,12 +101,18 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 
 	// 5. Append or overwrite entries
 	for _, e := range req.Entries {
-		idx := int(e.Index)
+		absIdx := int(e.Index)
+		offset := absIdx - r.logBaseIndex
 
-		if idx < len(r.log) {
-			if r.log[idx].Term != int(e.Term) {
+		// ignore entries older than our base snapshot
+		if offset < 0 {
+			continue
+		}
+
+		if offset < len(r.log) {
+			if r.log[offset].Term != int(e.Term) {
 				// remove conflict
-				r.log = r.log[:idx]
+				r.log = r.log[:offset]
 			} else {
 				continue
 			}
@@ -111,7 +120,7 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 
 		// append new entry
 		r.log = append(r.log, LogEntry{
-			Index: idx,
+			Index: absIdx,
 			Term:  int(e.Term),
 			Data:  e.Data,
 		})
@@ -126,7 +135,7 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 
 	// 7. Advance commit index
 	if int(req.LeaderCommit) > r.commitIndex {
-		last := len(r.log) - 1
+		last := r.lastLogIndex()
 		if int(req.LeaderCommit) < last {
 			r.commitIndex = int(req.LeaderCommit)
 		} else {
@@ -135,5 +144,69 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 	}
 
 	resp.Success = true
+	return resp, nil
+}
+
+func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	resp := &raftpb.InstallSnapshotResponse{Term: int32(r.term)}
+
+	// 1. Reject stale terms
+	if int(req.Term) < r.term {
+		return resp, nil
+	}
+
+	// 2. If higher term → update term and convert to follower
+	if int(req.Term) > r.term {
+		r.term = int(req.Term)
+		r.votedFor = ""
+		r.state = Follower
+		_ = r.meta.Save(r.term, r.votedFor)
+	}
+
+	// 3. Install snapshot locally
+	snap := &Snapshot{
+		LastIncludedIndex: int(req.LastIncludedIndex),
+		LastIncludedTerm:  int(req.LastIncludedTerm),
+		CreatedAt:         time.Now().Unix(),
+		Data:              req.Data,
+	}
+
+	if err := r.snapshotStore.Save(snap); err != nil {
+		log.Printf("[raft] snapshot save failed: %v", err)
+	}
+
+	r.snapshot = snap
+
+	// Preserve entries that are beyond the snapshot index
+	newLog := []LogEntry{{
+		Index: snap.LastIncludedIndex,
+		Term:  snap.LastIncludedTerm,
+	}}
+	for _, e := range r.log {
+		if e.Index > snap.LastIncludedIndex {
+			newLog = append(newLog, e)
+		}
+	}
+
+	r.log = newLog
+	r.logBaseIndex = snap.LastIncludedIndex
+
+	if err := r.logStore.SaveAll(r.log); err != nil {
+		log.Printf("[raft] failed to persist log after snapshot install: %v", err)
+	}
+
+	// Update progress indices
+	r.commitIndex = snap.LastIncludedIndex
+	r.lastApplied = snap.LastIncludedIndex
+
+	if r.restorer != nil {
+		if err := r.restorer(snap.Data); err != nil {
+			log.Printf("[raft] snapshot restore failed: %v", err)
+		}
+	}
+
 	return resp, nil
 }

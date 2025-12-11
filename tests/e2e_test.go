@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -59,7 +60,7 @@ func (c *MiniCluster) StartNode(t *testing.T, id string, peers []string) {
 		dir = t.TempDir()
 		c.dirs[id] = dir
 	}
-	
+
 	store, err := storage.Open(dir)
 	if err != nil {
 		t.Fatalf("failed to open storage for %s: %v", id, err)
@@ -74,9 +75,12 @@ func (c *MiniCluster) StartNode(t *testing.T, id string, peers []string) {
 	r := raft.New(raft.NodeID(id), peerIDs, dir)
 
 	// Inject Dialer to use bufconn
-	r.SetDialer(func(addr string) (raftpb.RaftClient, interface{ Close() error }, error) {
+	r.SetDialer(func(addr string) (raftpb.RaftClient, io.Closer, error) {
 		return c.dialRaft(addr)
 	})
+	// Wire snapshot hooks so Raft compaction uses the storage engine
+	r.SetSnapshotter(store.Snapshot)
+	r.SetSnapshotRestorer(store.Restore)
 
 	// 3. Listener (bufconn)
 	lis := bufconn.Listen(1024 * 1024)
@@ -162,15 +166,15 @@ func (c *MiniCluster) StopNode(id string) {
 	delete(c.listeners, id)
 }
 
-func (c *MiniCluster) dialRaft(addr string) (raftpb.RaftClient, interface{ Close() error }, error) {
+func (c *MiniCluster) dialRaft(addr string) (raftpb.RaftClient, io.Closer, error) {
 	// Look up listener
 	// Need to lock carefully or use separate lock map?
 	// The dialer is called asynchronously by Raft.
 	// We should allow concurrent reads.
-	
+
 	// Just use global lock for simplicity in test
 	// But dialer might block? bufconn Dial shouldn't block long if listener exists.
-	
+
 	// Use a separate method to get listener to avoid deadlock if necessary
 	lis := c.getListener(addr)
 	if lis == nil {
@@ -224,7 +228,7 @@ func TestEndToEnd_MiniCluster(t *testing.T) {
 	var leader *Node
 	timeout := time.After(10 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
-	
+
 Loop:
 	for {
 		select {
@@ -258,26 +262,26 @@ Loop:
 		deadline := time.Now().Add(5 * time.Second)
 		var lastErr error
 		success := false
-		
+
 		for time.Now().Before(deadline) {
 			// Need to use IsLeader check? No, GET should work on followers if we allowed it,
 			// BUT our current Server.Get implementation enforces Leader-only reads!
 			// "Get = local read (leader-only if needed)"
 			// internal/api/server.go: Get() checks if !s.raft.IsLeader() -> return error.
-			
+
 			// Ah, checking the code:
 			// func (s *Server) Get(...) { if !s.raft.IsLeader() return error ... }
-			
+
 			// So we can ONLY Get from leader.
 			// But the prompt said: "GET on every node"
 			// And "Redirect logic for followers".
-			
-			// If we want to verify replication, we should inspect the STORAGE directly, 
+
+			// If we want to verify replication, we should inspect the STORAGE directly,
 			// because the API rejects non-leaders.
 			// Or we rely on the redirect to find the leader (but then we are just reading from leader again).
-			
+
 			// To verify replication, we should check `n.Store.Get()` directly.
-			
+
 			n := cluster.nodes[id]
 			val, found, err := n.Store.Get([]byte("test-key"))
 			if err == nil && found && string(val) == "test-val" {
@@ -287,7 +291,7 @@ Loop:
 			lastErr = err
 			time.Sleep(100 * time.Millisecond)
 		}
-		
+
 		if !success {
 			t.Errorf("Node %s failed to get value: %v", id, lastErr)
 		}
@@ -302,7 +306,7 @@ Loop:
 	t.Log("Waiting for new leader...")
 	leader = nil // clear
 	timeout = time.After(10 * time.Second)
-	
+
 Loop2:
 	for {
 		select {
@@ -342,7 +346,7 @@ Loop2:
 		}
 	}
 	cluster.StartNode(t, oldLeaderID, others)
-	
+
 	// 8. Verify Old Leader catches up
 	t.Log("Verifying catch-up...")
 	deadline := time.Now().Add(10 * time.Second)
@@ -353,19 +357,18 @@ Loop2:
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		
+
 		v1, f1, _ := n.Store.Get([]byte("test-key"))
 		v2, f2, _ := n.Store.Get([]byte("key-2"))
-		
+
 		if f1 && string(v1) == "test-val" && f2 && string(v2) == "val-2" {
 			success = true
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	
+
 	if !success {
 		t.Fatalf("Restarted node failed to catch up")
 	}
 }
-

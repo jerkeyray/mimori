@@ -1,8 +1,8 @@
-
 package raft
 
 import (
 	"context"
+	"io"
 	"time"
 
 	raftpb "github.com/jerkeyray/mimori/internal/raft/raftpb"
@@ -20,8 +20,8 @@ func (r *Raft) broadcastRequestVote(term int) {
 		go func(p NodeID) {
 			// Snapshot last-log metadata under lock
 			r.mu.Lock()
-			lastIndex := len(r.log) - 1
-			lastTerm := r.log[lastIndex].Term
+			lastIndex := r.lastLogIndex()
+			lastTerm := r.lastLogTerm()
 			r.mu.Unlock()
 
 			client, conn, err := r.dialPeer(string(p))
@@ -53,10 +53,6 @@ func (r *Raft) sendHeartbeats() {
 	r.mu.Lock()
 	term := r.term
 	leaderID := r.id
-
-	logCopy := make([]LogEntry, len(r.log))
-	copy(logCopy, r.log)
-
 	peers := append([]NodeID(nil), r.peers...)
 	r.mu.Unlock()
 
@@ -66,48 +62,53 @@ func (r *Raft) sendHeartbeats() {
 			continue
 		}
 
-		// Snapshot follower's nextIndex
 		r.mu.Lock()
 		nextIdx := r.nextIndex[p]
-		if nextIdx < 1 {
-			nextIdx = 1
+		if nextIdx == 0 {
+			nextIdx = r.logBaseIndex + 1
 		}
-		r.mu.Unlock()
+		snap := r.snapshot
 
-		// Compute prevLogIndex/Term from snapshot
+		// follower is too far behind — send snapshot
+		if snap != nil && nextIdx <= snap.LastIncludedIndex {
+			r.mu.Unlock()
+			go r.sendSnapshotToFollower(p)
+			continue
+		}
+
 		prevLogIndex := nextIdx - 1
 		prevLogTerm := 0
-		if prevLogIndex >= 0 && prevLogIndex < len(logCopy) {
-			prevLogTerm = logCopy[prevLogIndex].Term
+		if entry, ok := r.entryAt(prevLogIndex); ok {
+			prevLogTerm = entry.Term
 		}
 
-		// Collect entries to send
-		entries := make([]*raftpb.LogEntry, 0)
-		for i := nextIdx; i < len(logCopy); i++ {
-			e := logCopy[i]
-			entries = append(entries, &raftpb.LogEntry{
-				Index: int32(e.Index),
-				Term:  int32(e.Term),
-				Data:  e.Data,
-			})
+		lastIndex := r.lastLogIndex()
+		entries := make([]*raftpb.LogEntry, 0, lastIndex-prevLogIndex)
+		for idx := nextIdx; idx <= lastIndex; idx++ {
+			if e, ok := r.entryAt(idx); ok {
+				entries = append(entries, &raftpb.LogEntry{
+					Index: int32(e.Index),
+					Term:  int32(e.Term),
+					Data:  e.Data,
+				})
+			}
 		}
+
+		freshCommit := r.commitIndex
+		r.mu.Unlock()
 
 		go func(
 			p NodeID,
 			prevLogIndex int,
 			prevLogTerm int,
 			entries []*raftpb.LogEntry,
+			freshCommit int,
 		) {
 			client, conn, err := r.dialPeer(string(p))
 			if err != nil {
 				return
 			}
 			defer conn.Close()
-
-			// Fetch the FRESH commit index under lock
-			r.mu.Lock()
-			freshCommit := r.commitIndex
-			r.mu.Unlock()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 			defer cancel()
@@ -137,9 +138,13 @@ func (r *Raft) sendHeartbeats() {
 				return
 			}
 
-			// If follower rejected → backtrack nextIndex
+			// If follower rejected → backtrack or snapshot
 			if !resp.Success {
-				if r.nextIndex[p] > 1 {
+				if r.snapshot != nil && r.nextIndex[p] <= r.snapshot.LastIncludedIndex {
+					go r.sendSnapshotToFollower(p)
+					return
+				}
+				if r.nextIndex[p] > r.logBaseIndex+1 {
 					r.nextIndex[p]--
 				}
 				return
@@ -152,15 +157,16 @@ func (r *Raft) sendHeartbeats() {
 				r.nextIndex[p] = lastSent + 1
 			} else {
 				// Heartbeat success: follower matches up to prevLogIndex
-				if prevLogIndex >= 0 {
+				if prevLogIndex >= r.logBaseIndex {
 					r.matchIndex[p] = prevLogIndex
+					r.nextIndex[p] = prevLogIndex + 1
 				}
 			}
 
 			// Try to advance leader commit index
 			r.updateCommitIndexLocked()
 
-		}(p, prevLogIndex, prevLogTerm, entries)
+		}(p, prevLogIndex, prevLogTerm, entries, freshCommit)
 	}
 
 	// Single-node cluster commits immediately
@@ -171,7 +177,7 @@ func (r *Raft) sendHeartbeats() {
 	}
 }
 
-func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, *grpc.ClientConn, error) {
+func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, io.Closer, error) {
 	if r.dialer != nil {
 		return r.dialer(addr)
 	}
@@ -190,4 +196,40 @@ func (r *Raft) dialPeer(addr string) (raftpb.RaftClient, *grpc.ClientConn, error
 	}
 
 	return raftpb.NewRaftClient(conn), conn, nil
+}
+
+func (r *Raft) sendSnapshotToFollower(p NodeID) {
+	r.mu.Lock()
+	snap := r.snapshot
+	r.mu.Unlock()
+
+	if snap == nil {
+		var err error
+		snap, err = r.snapshotStore.Load()
+		if err != nil || snap == nil {
+			return
+		}
+	}
+
+	client, conn, err := r.dialPeer(string(p))
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, _ = client.InstallSnapshot(ctx, &raftpb.InstallSnapshotRequest{
+		Term:              int32(r.term),
+		LeaderId:          string(r.id),
+		LastIncludedIndex: int32(snap.LastIncludedIndex),
+		LastIncludedTerm:  int32(snap.LastIncludedTerm),
+		Data:              snap.Data,
+	})
+
+	r.mu.Lock()
+	r.matchIndex[p] = snap.LastIncludedIndex
+	r.nextIndex[p] = snap.LastIncludedIndex + 1
+	r.mu.Unlock()
 }

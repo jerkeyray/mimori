@@ -1,0 +1,11 @@
+./adapters.go
+./adapters_errno.go
+./decode.go
+./encode.go
+./format_error.go
+./formatter.go
+./migrations.go
+./opaque.go
+./oserror_go116.go
+./safe_details.go
+./unwrap.go

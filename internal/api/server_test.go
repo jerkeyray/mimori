@@ -57,7 +57,7 @@ func (m *mockRaft) Status() raft.Status {
 func startTestServer(t *testing.T, r *mockRaft, s storage.KV) (kv.KVClient, func()) {
 	lis := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	
+
 	kv.RegisterKVServer(server, NewServer(s, r))
 
 	go func() {
@@ -103,31 +103,31 @@ func TestServer_Put(t *testing.T) {
 		leaderID: "node1",
 		proposeFunc: func(cmd []byte) (int, error) {
 			// In a real integration, the apply loop would write to storage.
-			// Here we simulate the side-effect of the apply loop manually 
+			// Here we simulate the side-effect of the apply loop manually
 			// because the Server handler waits for apply but DOES NOT apply itself.
 			// The Server relies on the background applier.
-			
+
 			// However, the Server handler:
 			// 1. Propose()
 			// 2. AppliedWait()
 			// It assumes someone else applied it.
-			
+
 			// So for this test to pass "Pebble contains the value afterward",
-			// we must simulate the apply effect here or in a background goroutine 
+			// we must simulate the apply effect here or in a background goroutine
 			// triggered by Propose.
-			
+
 			// But wait, the Server code doesn't write to DB. The Apply Loop does.
 			// In `cmd/mimorid/main.go`, the main loop reads ApplyCh and writes to DB.
 			// In `internal/api/server.go`, the Put handler does NOT write to DB.
-			// So verifying "Pebble contains the value" in a unit test of `Server` ONLY 
+			// So verifying "Pebble contains the value" in a unit test of `Server` ONLY
 			// is technically verifying something the Server doesn't do itself.
 			// The Server waits for it to happen.
-			
+
 			// So, if we want to test "Server correctly coordinates", we should:
 			// 1. Have Propose return an index.
 			// 2. Have AppliedWait wait.
 			// 3. We (the test) should verify that Server calls these correctly.
-			
+
 			// If we want to verify "Pebble contains value", we must simulate the applier.
 			return 100, nil
 		},
@@ -202,7 +202,7 @@ func TestServer_FollowerRedirect(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from follower Put")
 	}
-	
+
 	// Check error message for redirect info
 	// gRPC errors need status package to unpack usually, but Error() string contains it
 	if !contains(err.Error(), "not leader") || !contains(err.Error(), "node2:4000") {
@@ -213,4 +213,3 @@ func TestServer_FollowerRedirect(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
-

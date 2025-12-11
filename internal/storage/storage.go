@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"encoding/json"
+
 	"github.com/cockroachdb/pebble"
 )
 
@@ -10,6 +12,9 @@ type KV interface {
 	Get(key []byte) ([]byte, bool, error)
 	Delete(key []byte) error
 	Close() error
+
+	Snapshot() ([]byte, error)
+	Restore(data []byte) error
 }
 
 // PebbleKV is a wrapper aroung the actual Pebble db
@@ -59,4 +64,56 @@ func (p *PebbleKV) Delete(key []byte) error {
 // gracefully shutdown the db
 func (p *PebbleKV) Close() error {
 	return p.db.Close()
+}
+
+// Snapshot dumps the entire DB into JSON { "key": "value" }
+func (p *PebbleKV) Snapshot() ([]byte, error) {
+	it, err := p.db.NewIter(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer it.Close()
+
+	snapshotMap := make(map[string][]byte)
+
+	for it.First(); it.Valid(); it.Next() {
+		key := append([]byte(nil), it.Key()...)
+		val := append([]byte(nil), it.Value()...)
+		snapshotMap[string(key)] = val
+	}
+
+	return json.Marshal(snapshotMap)
+}
+
+// Restore wipes all data and loads the snapshot
+func (p *PebbleKV) Restore(data []byte) error {
+	// empty snapshot — treat as empty DB
+	if data == nil || len(data) == 0 {
+		return p.reset()
+	}
+
+	var snapshotMap map[string][]byte
+	if err := json.Unmarshal(data, &snapshotMap); err != nil {
+		return err
+	}
+
+	// wipe DB before restoring
+	if err := p.reset(); err != nil {
+		return err
+	}
+
+	// restore all keys
+	batch := p.db.NewBatch()
+	for k, v := range snapshotMap {
+		if err := batch.Set([]byte(k), v, nil); err != nil {
+			return err
+		}
+	}
+
+	return batch.Commit(pebble.Sync)
+}
+
+func (p *PebbleKV) reset() error {
+	// Pebble does not have a native "clear all" so we do a range deletion
+	return p.db.DeleteRange(nil, nil, pebble.Sync)
 }

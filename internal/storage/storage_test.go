@@ -43,7 +43,7 @@ func TestPebbleKV(t *testing.T) {
 
 func TestPebbleKV_Persistence(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Open and write data
 	{
 		db, err := Open(dir)

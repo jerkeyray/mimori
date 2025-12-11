@@ -11,7 +11,7 @@ import (
 func TestCluster_HealthCheck(t *testing.T) {
 	// Start a mock HTTP server for a peer
 	// We need to control the port.
-	
+
 	// Let's find a free port
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -41,10 +41,10 @@ func TestCluster_HealthCheck(t *testing.T) {
 	// Create Cluster
 	// Self address doesn't matter much here
 	c := New("127.0.0.1:9000", []string{peerAddr})
-	
+
 	// Start monitoring
 	// We can't easily wait for the ticker in Start(), so we might want to just call pingPeers directly
-	// but pingPeers is private. 
+	// but pingPeers is private.
 	// The user prompt says "Mock HTTP health endpoints to test: peer marked alive, peer marked dead".
 	// Since pingPeers is private, I can't call it from a test in a different package (if I used package cluster_test).
 	// But I am using package cluster.
@@ -83,4 +83,3 @@ func TestCluster_StartStop(t *testing.T) {
 	c.Stop()
 	// Just ensure no panic/deadlock
 }
-

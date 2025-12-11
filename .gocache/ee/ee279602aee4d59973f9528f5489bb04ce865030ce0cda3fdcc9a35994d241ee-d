@@ -1,0 +1,5 @@
+_cgo_gotypes.go
+errors.cgo1.go
+zstd.cgo1.go
+zstd_stream.cgo1.go
+_cgo_import.go

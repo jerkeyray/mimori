@@ -27,24 +27,24 @@ func NewSnapshotStore(path string) *SnapshotStore {
 func (s *SnapshotStore) Save(snap *Snapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	b, err := json.Marshal(snap)
 	if err != nil {
-		return err 
+		return err
 	}
-	
+
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0644); err != nil {
 		return err
 	}
-	
+
 	return os.Rename(tmp, s.path)
 }
 
 func (s *SnapshotStore) Load() (*Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	b, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -52,19 +52,18 @@ func (s *SnapshotStore) Load() (*Snapshot, error) {
 		}
 		return nil, err
 	}
-	
+
 	var snap Snapshot
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, err
 	}
-	
-	return &snap, nil 
+
+	return &snap, nil
 }
 
-func (s *SnapshotStore) Path() string {return s.path}
+func (s *SnapshotStore) Path() string { return s.path }
 
 // helper to bulid path join quickly
 func SnapshotPath(dataDir string) string {
 	return filepath.Join(dataDir, "raft-snap.json")
 }
-

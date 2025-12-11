@@ -1,0 +1,3 @@
+./redact.go
+./safedetails.go
+./with_safedetails.go
