@@ -12,7 +12,7 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start).Seconds()
-		metricRPCRequestVoteDuration.WithLabelValues(string(r.id), req.CandidateId).Observe(duration)
+		metricRPCRequestVoteDuration.WithLabelValues(string(r.id)).Observe(duration)
 	}()
 
 	r.mu.Lock()
@@ -71,7 +71,7 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start).Seconds()
-		metricRPCAppendEntriesDuration.WithLabelValues(string(r.id), req.LeaderId).Observe(duration)
+		metricRPCAppendEntriesDuration.WithLabelValues(string(r.id)).Observe(duration)
 	}()
 
 	r.mu.Lock()
@@ -223,7 +223,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 			logging.WithRaftContext(string(r.id), r.term, r.state.String()).
 				Err(err).Int("last_included_index", snap.LastIncludedIndex).
 				Msg("snapshot restore failed")
-			metricRPCErrorsTotal.WithLabelValues(string(r.id), "install_snapshot", "restore_failed").Inc()
+			// Note: metrics updated in ticker loop, not here
 		}
 	}
 

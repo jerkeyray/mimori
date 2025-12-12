@@ -18,3 +18,8 @@ CURRENT
 *.so
 .gocache/
 bin/
+mimorid
+mimorictl
+
+# Docker volumes (data directories)
+docker-volumes/

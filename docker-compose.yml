@@ -1,0 +1,145 @@
+services:
+  # Node 1
+  mimori-node1:
+    build: .
+    container_name: mimori-node1
+    ports:
+      - "4000:4000" # gRPC
+      - "4001:4001" # HTTP
+    environment:
+      - MIMORI_ADDR=:4000
+      - MIMORI_NODE_ID=mimori-node1:4000
+      - MIMORI_DATA=/data
+      - MIMORI_PEERS=mimori-node2:4000,mimori-node3:4000
+      - MIMORI_LOG_FORMAT=json
+      - MIMORI_LOG_LEVEL=info
+    volumes:
+      - node1-data:/data
+    networks:
+      - mimori-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:4001/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Node 2
+  mimori-node2:
+    build: .
+    container_name: mimori-node2
+    ports:
+      - "4002:4000" # gRPC
+      - "4003:4001" # HTTP
+    environment:
+      - MIMORI_ADDR=:4000
+      - MIMORI_NODE_ID=mimori-node2:4000
+      - MIMORI_DATA=/data
+      - MIMORI_PEERS=mimori-node1:4000,mimori-node3:4000
+      - MIMORI_LOG_FORMAT=json
+      - MIMORI_LOG_LEVEL=info
+    volumes:
+      - node2-data:/data
+    networks:
+      - mimori-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:4001/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Node 3
+  mimori-node3:
+    build: .
+    container_name: mimori-node3
+    ports:
+      - "4004:4000" # gRPC
+      - "4005:4001" # HTTP
+    environment:
+      - MIMORI_ADDR=:4000
+      - MIMORI_NODE_ID=mimori-node3:4000
+      - MIMORI_DATA=/data
+      - MIMORI_PEERS=mimori-node1:4000,mimori-node2:4000
+      - MIMORI_LOG_FORMAT=json
+      - MIMORI_LOG_LEVEL=info
+    volumes:
+      - node3-data:/data
+    networks:
+      - mimori-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:4001/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    networks:
+      - mimori-network
+    depends_on:
+      - mimori-node1
+      - mimori-node2
+      - mimori-node3
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - ./docker/grafana-dashboard.json:/etc/grafana/dashboards/mimori.json
+    networks:
+      - mimori-network
+    depends_on:
+      - prometheus
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  mimori-network:
+    driver: bridge

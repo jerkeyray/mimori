@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Build artifacts
+mimorid
+mimorictl
+*.test
+*.out
+*.prof
+
+# Data directories
+data/
+data1/
+data2/
+data3/
+*.sst
+*.log
+MANIFEST-*
+OPTIONS-*
+CURRENT
+
+# Cache
+.gocache/
+bin/
+
+# Documentation
+notes/
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

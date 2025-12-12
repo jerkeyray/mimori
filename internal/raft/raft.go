@@ -553,8 +553,6 @@ func (r *Raft) Status() Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.updateMetrics() // Update metrics whenever status is queried
-
 	return Status{
 		ID:          string(r.id),
 		State:       r.state.String(),
@@ -596,9 +594,10 @@ func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, io.Closer, erro
 	r.dialer = d
 }
 
-// runMetricsUpdater periodically updates Prometheus metrics
+// runMetricsUpdater periodically updates Prometheus metrics.
+// This is the ONLY place updateMetrics() is called.
 func (r *Raft) runMetricsUpdater() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for {

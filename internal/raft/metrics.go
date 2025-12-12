@@ -103,32 +103,32 @@ var (
 		[]string{"node_id"},
 	)
 
-	// RPC latencies
+	// RPC latencies (local node only, no peer labels)
 	metricRPCRequestVoteDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "raft_rpc_request_vote_duration_seconds",
-			Help:    "Duration of RequestVote RPC calls",
+			Help:    "Duration of RequestVote RPC calls received by this node",
 			Buckets: prometheus.ExponentialBuckets(0.001, 2, 10), // 1ms to ~1s
 		},
-		[]string{"node_id", "peer"},
+		[]string{"node_id"},
 	)
 
 	metricRPCAppendEntriesDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "raft_rpc_append_entries_duration_seconds",
-			Help:    "Duration of AppendEntries RPC calls",
+			Help:    "Duration of AppendEntries RPC calls received by this node",
 			Buckets: prometheus.ExponentialBuckets(0.001, 2, 10),
 		},
-		[]string{"node_id", "peer"},
+		[]string{"node_id"},
 	)
 
 	metricRPCInstallSnapshotDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "raft_rpc_install_snapshot_duration_seconds",
-			Help:    "Duration of InstallSnapshot RPC calls",
+			Help:    "Duration of InstallSnapshot RPC calls received by this node",
 			Buckets: prometheus.ExponentialBuckets(0.01, 2, 10), // 10ms to ~10s (snapshots are larger)
 		},
-		[]string{"node_id", "peer"},
+		[]string{"node_id"},
 	)
 
 	// RPC errors
@@ -150,8 +150,8 @@ var (
 	)
 )
 
-// updateMetrics updates all Prometheus metrics based on current Raft state.
-// Call this periodically or after state changes.
+// updateMetrics updates all Prometheus metrics for THIS node only.
+// Must be called with r.mu held. Only called from runMetricsUpdater ticker loop.
 func (r *Raft) updateMetrics() {
 	nodeID := string(r.id)
 
@@ -176,11 +176,16 @@ func (r *Raft) updateMetrics() {
 		metricSnapshotSizeBytes.WithLabelValues(nodeID).Set(0)
 	}
 
-	// Replication lag (leader only)
+	// Replication lag (leader only) - allowed to use peer label
 	if r.state == Leader {
 		for peer, matchIdx := range r.matchIndex {
 			lag := r.commitIndex - matchIdx
 			metricReplicationLag.WithLabelValues(nodeID, string(peer)).Set(float64(lag))
+		}
+	} else {
+		// Clear replication lag metrics when not leader
+		for peer := range r.matchIndex {
+			metricReplicationLag.WithLabelValues(nodeID, string(peer)).Set(0)
 		}
 	}
 }

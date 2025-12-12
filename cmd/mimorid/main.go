@@ -21,6 +21,12 @@ func main() {
 	dataDir := env("MIMORI_DATA", "data")
 	peerList := splitPeers(env("MIMORI_PEERS", ""))
 
+	// Node ID: use MIMORI_NODE_ID if set, otherwise use address
+	nodeID := env("MIMORI_NODE_ID", addr)
+	if nodeID == "" {
+		nodeID = addr
+	}
+
 	// open pebble DB
 	store, err := storage.Open(dataDir)
 	if err != nil {
@@ -31,7 +37,7 @@ func main() {
 
 	// give the network addr as the unique raft node id and give its peerList
 	raftNode := raft.New(
-		raft.NodeID(addr), convertPeersToNodeIDs(peerList), dataDir,
+		raft.NodeID(nodeID), convertPeersToNodeIDs(peerList), dataDir,
 	)
 
 	// state machine apply loop: decode cmds and apply to KV

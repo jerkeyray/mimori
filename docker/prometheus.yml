@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "mimori-nodes"
+    static_configs:
+      - targets:
+          - "mimori-node1:4001"
+          - "mimori-node2:4001"
+          - "mimori-node3:4001"
+        labels:
+          cluster: "mimori"
