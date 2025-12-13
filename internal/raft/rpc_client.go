@@ -136,7 +136,7 @@ func (r *Raft) sendHeartbeats() {
 				r.term = int(resp.Term)
 				r.state = Follower
 				r.votedFor = ""
-				_ = r.meta.Save(r.term, r.votedFor)
+				_ = r.meta.Save(r.term, r.votedFor, r.peers)
 				return
 			}
 

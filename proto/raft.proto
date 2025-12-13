@@ -1,4 +1,3 @@
-
 syntax = "proto3";
 
 package raftpb;
@@ -56,8 +55,28 @@ message InstallSnapshotResponse {
     int32 term = 1;
 }
 
+message AddNodeRequest {
+    string node_id = 1;
+}
+
+message AddNodeResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message RemoveNodeRequest {
+    string node_id = 1;
+}
+
+message RemoveNodeResponse {
+    bool success = 1;
+    string error = 2;
+}
+
 service Raft {
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
   rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
   rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+  rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
 }

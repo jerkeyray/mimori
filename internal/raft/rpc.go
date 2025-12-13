@@ -18,6 +18,16 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Ignore vote requests from nodes not in the current configuration.
+	// This prevents term bumps and split-brain triggered by nodes that
+	// haven't been added yet.
+	if !r.isKnownNode(NodeID(req.CandidateId)) {
+		return &raftpb.RequestVoteResponse{
+			Term:        int32(r.term),
+			VoteGranted: false,
+		}, nil
+	}
+
 	resp := &raftpb.RequestVoteResponse{
 		Term: int32(r.term),
 	}
@@ -33,7 +43,7 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
-		_ = r.meta.Save(r.term, r.votedFor)
+		_ = r.meta.Save(r.term, r.votedFor, r.peers)
 	}
 
 	// 3. Enforce Raft log up-to-date rule
@@ -57,7 +67,7 @@ func (r *Raft) RequestVote(ctx context.Context, req *raftpb.RequestVoteRequest) 
 	if r.votedFor == "" || r.votedFor == NodeID(req.CandidateId) {
 		r.votedFor = NodeID(req.CandidateId)
 		r.electionReset = time.Now()
-		_ = r.meta.Save(r.term, r.votedFor)
+		_ = r.meta.Save(r.term, r.votedFor, r.peers)
 		resp.VoteGranted = true
 		return resp, nil
 	}
@@ -77,6 +87,14 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Ignore append entries from unknown leaders (not in current config).
+	if !r.isKnownNode(NodeID(req.LeaderId)) {
+		return &raftpb.AppendEntriesResponse{
+			Term:    int32(r.term),
+			Success: false,
+		}, nil
+	}
+
 	resp := &raftpb.AppendEntriesResponse{Term: int32(r.term)}
 
 	// 1. Reject old term
@@ -90,7 +108,7 @@ func (r *Raft) AppendEntries(ctx context.Context, req *raftpb.AppendEntriesReque
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
-		_ = r.meta.Save(r.term, r.votedFor)
+		_ = r.meta.Save(r.term, r.votedFor, r.peers)
 	}
 
 	// 3. Set leader ID and heartbeat timestamp
@@ -176,7 +194,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 		r.term = int(req.Term)
 		r.votedFor = ""
 		r.state = Follower
-		_ = r.meta.Save(r.term, r.votedFor)
+		_ = r.meta.Save(r.term, r.votedFor, r.peers)
 	}
 
 	// 3. Install snapshot locally
@@ -229,4 +247,44 @@ func (r *Raft) InstallSnapshot(ctx context.Context, req *raftpb.InstallSnapshotR
 
 	metricSnapshotsInstalled.WithLabelValues(string(r.id)).Inc()
 	return resp, nil
+}
+
+// AddNode handles the gRPC AddNode request
+func (r *Raft) AddNode(ctx context.Context, req *raftpb.AddNodeRequest) (*raftpb.AddNodeResponse, error) {
+	if !r.IsLeader() {
+		return &raftpb.AddNodeResponse{
+			Success: false,
+			Error:   "not leader",
+		}, nil
+	}
+
+	nodeID := NodeID(req.NodeId)
+	if err := r.AddNodeInternal(nodeID); err != nil {
+		return &raftpb.AddNodeResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	return &raftpb.AddNodeResponse{Success: true}, nil
+}
+
+// RemoveNode handles the gRPC RemoveNode request
+func (r *Raft) RemoveNode(ctx context.Context, req *raftpb.RemoveNodeRequest) (*raftpb.RemoveNodeResponse, error) {
+	if !r.IsLeader() {
+		return &raftpb.RemoveNodeResponse{
+			Success: false,
+			Error:   "not leader",
+		}, nil
+	}
+
+	nodeID := NodeID(req.NodeId)
+	if err := r.RemoveNodeInternal(nodeID); err != nil {
+		return &raftpb.RemoveNodeResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	return &raftpb.RemoveNodeResponse{Success: true}, nil
 }

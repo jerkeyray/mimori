@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/prometheus/client_golang v1.23.2
+	github.com/rs/zerolog v1.34.0
 	github.com/spf13/cobra v1.10.1
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.10
@@ -34,7 +35,6 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
-	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect

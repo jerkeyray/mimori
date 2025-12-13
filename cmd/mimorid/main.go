@@ -61,6 +61,9 @@ func main() {
 					logger := logging.With().Err(err).Str("key", string(cmd.Key)).Logger()
 					logger.Error().Msg("apply DELETE failed")
 				}
+			case raft.CmdConfigChange:
+				// Raft handles configuration changes internally (peer list updates).
+				// Nothing for the KV state machine to apply.
 			default:
 				logger := logging.With().Int("op", int(cmd.Op)).Logger()
 				logger.Warn().Msg("unknown command op")

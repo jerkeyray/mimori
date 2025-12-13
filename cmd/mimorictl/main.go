@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/jerkeyray/mimori/internal/api/kv"
+	raftpb "github.com/jerkeyray/mimori/internal/raft/raftpb"
 )
 
 // notes:
@@ -51,6 +52,8 @@ to a MimoriDB node running locally or remotely.`,
 		newSnapshotCmd(),
 		newMetricsCmd(),
 		newLeaderCmd(),
+		newAddNodeCmd(),
+		newRemoveNodeCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -473,4 +476,104 @@ func getHTTPPort() int {
 		log.Fatalf("invalid addr format: %s", addr)
 	}
 	return portToInt(port) + 1
+}
+
+func newAddNodeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "add-node [node-id]",
+		Short: "Add a node to the cluster",
+		Long:  "Add a node to the cluster. The node-id should be the address (e.g., :4000) that the new node will use. This command must be run against the leader.",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			nodeID := args[0]
+			if err := doAddNode(nodeID); err != nil {
+				log.Fatalf("add-node failed: %v", err)
+			}
+			fmt.Printf("Node %s added to cluster successfully\n", nodeID)
+		},
+	}
+}
+
+func newRemoveNodeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove-node [node-id]",
+		Short: "Remove a node from the cluster",
+		Long:  "Remove a node from the cluster. This command must be run against the leader. Cannot remove the last remaining peer.",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			nodeID := args[0]
+			if err := doRemoveNode(nodeID); err != nil {
+				log.Fatalf("remove-node failed: %v", err)
+			}
+			fmt.Printf("Node %s removed from cluster successfully\n", nodeID)
+		},
+	}
+}
+
+func doAddNode(nodeID string) error {
+	addrToUse := addr
+	// Use longer timeout for config changes as they need to commit and replicate
+	configTimeout := 10 * time.Second
+
+	for attempt := 0; attempt < 2; attempt++ {
+		client := mustConnectTo(addrToUse)
+		ctx, cancel := context.WithTimeout(context.Background(), configTimeout)
+		defer cancel()
+
+		// Create Raft client
+		raftClient := raftpb.NewRaftClient(client.conn)
+		resp, err := raftClient.AddNode(ctx, &raftpb.AddNodeRequest{NodeId: nodeID})
+		client.Close()
+
+		if err == nil {
+			if !resp.Success {
+				return fmt.Errorf(resp.Error)
+			}
+			return nil
+		}
+
+		// Check for redirect
+		if leader, ok := extractLeaderAddr(err); ok {
+			addrToUse = leader
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("redirected but still failed")
+}
+
+func doRemoveNode(nodeID string) error {
+	addrToUse := addr
+	// Use longer timeout for config changes as they need to commit and replicate
+	configTimeout := 10 * time.Second
+
+	for attempt := 0; attempt < 2; attempt++ {
+		client := mustConnectTo(addrToUse)
+		ctx, cancel := context.WithTimeout(context.Background(), configTimeout)
+		defer cancel()
+
+		// Create Raft client
+		raftClient := raftpb.NewRaftClient(client.conn)
+		resp, err := raftClient.RemoveNode(ctx, &raftpb.RemoveNodeRequest{NodeId: nodeID})
+		client.Close()
+
+		if err == nil {
+			if !resp.Success {
+				return fmt.Errorf(resp.Error)
+			}
+			return nil
+		}
+
+		// Check for redirect
+		if leader, ok := extractLeaderAddr(err); ok {
+			addrToUse = leader
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("redirected but still failed")
 }

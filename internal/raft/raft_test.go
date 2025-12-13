@@ -58,6 +58,14 @@ func (c *directClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSn
 	return c.target.InstallSnapshot(ctx, in)
 }
 
+func (c *directClient) AddNode(ctx context.Context, in *raftpb.AddNodeRequest, opts ...grpc.CallOption) (*raftpb.AddNodeResponse, error) {
+	return c.target.AddNode(ctx, in)
+}
+
+func (c *directClient) RemoveNode(ctx context.Context, in *raftpb.RemoveNodeRequest, opts ...grpc.CallOption) (*raftpb.RemoveNodeResponse, error) {
+	return c.target.RemoveNode(ctx, in)
+}
+
 // noOpCloser is a closer that does nothing
 type noOpCloser struct{}
 

@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"math/rand"
@@ -85,7 +86,11 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 	metaPath := path.Join(dataDir, "raft-meta.json")
 	meta := NewMetaStore(metaPath)
 
-	term, votedFor, _ := meta.Load()
+	term, votedFor, savedPeers, _ := meta.Load()
+	// Use saved peers if available (from previous config changes), otherwise use initial peers
+	if len(savedPeers) > 0 {
+		peers = savedPeers
+	}
 
 	logPath := filepath.Join(dataDir, "raft-log.json")
 	logStore := NewLogStore(logPath)
@@ -143,7 +148,11 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 		snapshot:      snap,
 	}
 
-	for _, p := range peers {
+	// Replay configuration changes from committed log entries
+	// This ensures peers list matches the latest committed configuration
+	r.replayConfigChanges()
+
+	for _, p := range r.peers {
 		r.nextIndex[p] = r.lastLogIndex() + 1
 		r.matchIndex[p] = 0
 	}
@@ -307,6 +316,24 @@ func (r *Raft) LeaderID() NodeID {
 
 func (r *Raft) ApplyCh() <-chan LogEntry { return r.applyCh }
 
+// isKnownNode reports whether the given node ID is in the current configuration
+// (self or peers). Used to ignore requests from unknown nodes to avoid term
+// bumps / elections from nodes not yet added.
+func (r *Raft) isKnownNode(id NodeID) bool {
+	if id == "" {
+		return false
+	}
+	if id == r.id {
+		return true
+	}
+	for _, p := range r.peers {
+		if p == id {
+			return true
+		}
+	}
+	return false
+}
+
 // -----------------------------------------------------------------------------
 // Election & Heartbeat Logic (unchanged from your base version)
 // -----------------------------------------------------------------------------
@@ -346,11 +373,15 @@ func (r *Raft) startElectionLocked() {
 	r.state = Candidate
 	r.term++
 	r.votedFor = r.id
-	r.meta.Save(r.term, r.votedFor)
+	r.meta.Save(r.term, r.votedFor, r.peers)
 	r.electionReset = time.Now()
 	r.votes = 1
 
-	if r.votes > len(r.peers)/2 {
+	// Majority is based on total voting members (self + peers).
+	// With 2 nodes, majority=2, so self-vote alone is NOT enough.
+	total := len(r.peers) + 1
+	majority := total/2 + 1
+	if r.votes >= majority {
 		r.becomeLeaderLocked()
 		return
 	}
@@ -377,7 +408,9 @@ func (r *Raft) handleVoteResponse(resp *raftpb.RequestVoteResponse) {
 
 	if resp.VoteGranted {
 		r.votes++
-		if r.votes > len(r.peers)/2 {
+		total := len(r.peers) + 1
+		majority := total/2 + 1
+		if r.votes >= majority {
 			r.becomeLeaderLocked()
 		}
 	}
@@ -440,6 +473,10 @@ func (r *Raft) runApplier() {
 				continue
 			}
 			r.lastApplied = nextIndex
+
+			// Handle configuration changes internally before sending to applyCh
+			r.handleConfigChangeIfNeeded(entry)
+
 			r.mu.Unlock()
 
 			r.applyCh <- entry
@@ -584,6 +621,205 @@ func (s RaftState) String() string {
 		return "leader"
 	}
 	return "unknown"
+}
+
+// -----------------------------------------------------------------------------
+// Configuration Management
+// -----------------------------------------------------------------------------
+
+// replayConfigChanges replays all committed configuration changes from the log
+// to reconstruct the current peer list. Called during initialization.
+func (r *Raft) replayConfigChanges() {
+	// Start from logBaseIndex + 1 (first real entry after snapshot)
+	startIdx := r.logBaseIndex + 1
+	if startIdx < 1 {
+		startIdx = 1
+	}
+
+	for idx := startIdx; idx <= r.lastLogIndex(); idx++ {
+		entry, ok := r.entryAt(idx)
+		if !ok {
+			continue
+		}
+
+		// Check if this is a configuration change entry
+		var cmd struct {
+			Op     CommandType `json:"op"`
+			Type   string      `json:"type,omitempty"`
+			NodeID string      `json:"node_id,omitempty"`
+		}
+		if err := json.Unmarshal(entry.Data, &cmd); err != nil {
+			continue
+		}
+
+		if cmd.Op == CmdConfigChange {
+			r.applyConfigChangeLocked(cmd.Type == "add", NodeID(cmd.NodeID))
+		}
+	}
+}
+
+// applyConfigChangeLocked applies a configuration change to the peers list.
+// Must be called with r.mu held.
+func (r *Raft) applyConfigChangeLocked(isAdd bool, nodeID NodeID) {
+	if nodeID == r.id {
+		// Don't add/remove self
+		return
+	}
+
+	if isAdd {
+		// Add node if not already present
+		found := false
+		for _, p := range r.peers {
+			if p == nodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.peers = append(r.peers, nodeID)
+			r.nextIndex[nodeID] = r.lastLogIndex() + 1
+			r.matchIndex[nodeID] = 0
+		}
+	} else {
+		// Remove node
+		newPeers := make([]NodeID, 0, len(r.peers))
+		for _, p := range r.peers {
+			if p != nodeID {
+				newPeers = append(newPeers, p)
+			}
+		}
+		r.peers = newPeers
+		delete(r.nextIndex, nodeID)
+		delete(r.matchIndex, nodeID)
+	}
+
+	// Persist updated configuration
+	_ = r.meta.Save(r.term, r.votedFor, r.peers)
+}
+
+// AddNodeInternal proposes adding a node to the cluster (internal API).
+// Only the leader can propose configuration changes.
+// Waits for the configuration change to be committed and applied before returning.
+func (r *Raft) AddNodeInternal(nodeID NodeID) error {
+	r.mu.Lock()
+	index, err := r.proposeConfigChange(ConfigAddNode, nodeID)
+	r.mu.Unlock()
+
+	if err != nil {
+		return err
+	}
+
+	// Kick replication / commit advancement (safe: sendHeartbeats acquires its own locks)
+	// Important: proposeConfigChange must NOT call sendHeartbeats while holding r.mu.
+	r.sendHeartbeats()
+
+	// Wait for the configuration change to be committed and applied
+	<-r.AppliedWait(index)
+	return nil
+}
+
+// RemoveNodeInternal proposes removing a node from the cluster (internal API).
+// Only the leader can propose configuration changes.
+// Waits for the configuration change to be committed and applied before returning.
+func (r *Raft) RemoveNodeInternal(nodeID NodeID) error {
+	r.mu.Lock()
+	index, err := r.proposeConfigChange(ConfigRemoveNode, nodeID)
+	r.mu.Unlock()
+
+	if err != nil {
+		return err
+	}
+
+	// Kick replication / commit advancement (safe: sendHeartbeats acquires its own locks)
+	// Important: proposeConfigChange must NOT call sendHeartbeats while holding r.mu.
+	r.sendHeartbeats()
+
+	// Wait for the configuration change to be committed and applied
+	<-r.AppliedWait(index)
+	return nil
+}
+
+// handleConfigChangeIfNeeded checks if an entry is a configuration change and applies it.
+// Must be called with r.mu held.
+func (r *Raft) handleConfigChangeIfNeeded(entry LogEntry) {
+	var cmd struct {
+		Op     CommandType `json:"op"`
+		Type   string      `json:"type"`
+		NodeID string      `json:"node_id"`
+	}
+	if err := json.Unmarshal(entry.Data, &cmd); err != nil {
+		return
+	}
+
+	if cmd.Op == CmdConfigChange {
+		isAdd := cmd.Type == "add"
+		r.applyConfigChangeLocked(isAdd, NodeID(cmd.NodeID))
+
+		logger := logging.WithRaftContext(string(r.id), r.term, r.state.String())
+		logger.Info().
+			Str("action", cmd.Type).
+			Str("node_id", cmd.NodeID).
+			Int("peer_count", len(r.peers)).
+			Msg("configuration change applied")
+	}
+}
+
+// proposeConfigChange proposes a configuration change log entry.
+// Must be called with r.mu held. Returns the log index of the proposed entry.
+func (r *Raft) proposeConfigChange(changeType ConfigChangeType, nodeID NodeID) (int, error) {
+	if r.state != Leader {
+		return 0, ErrNotLeader
+	}
+
+	// Don't allow removing the last node (would make cluster unavailable)
+	if changeType == ConfigRemoveNode {
+		if len(r.peers) <= 1 {
+			return 0, errors.New("cannot remove last peer")
+		}
+		// Check if node exists
+		found := false
+		for _, p := range r.peers {
+			if p == nodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, errors.New("node not in cluster")
+		}
+	}
+
+	// Wrap in command structure
+	cmd := struct {
+		Op     CommandType `json:"op"`
+		Type   string      `json:"type"`
+		NodeID string      `json:"node_id"`
+	}{
+		Op:     CmdConfigChange,
+		Type:   map[ConfigChangeType]string{ConfigAddNode: "add", ConfigRemoveNode: "remove"}[changeType],
+		NodeID: string(nodeID),
+	}
+	cmdData, err := json.Marshal(cmd)
+	if err != nil {
+		return 0, err
+	}
+
+	// Append to log
+	index := r.lastLogIndex() + 1
+	r.log = append(r.log, LogEntry{
+		Index: index,
+		Term:  r.term,
+		Data:  cmdData,
+	})
+
+	if err := r.logStore.SaveAll(r.log); err != nil {
+		logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+			Err(err).Msg("log persist failed")
+		return 0, err
+	}
+
+	// Replicate to followers
+	return index, nil
 }
 
 // -----------------------------------------------------------------------------
