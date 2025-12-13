@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -820,6 +821,97 @@ func (r *Raft) proposeConfigChange(changeType ConfigChangeType, nodeID NodeID) (
 
 	// Replicate to followers
 	return index, nil
+}
+
+// -----------------------------------------------------------------------------
+// Leader Transfer
+// -----------------------------------------------------------------------------
+
+// TransferLeadershipInternal initiates a leadership transfer to the target node.
+// The leader will send a TimeoutNow RPC to the target, causing it to immediately
+// start an election. Since the target is up-to-date (has been receiving heartbeats),
+// it should win the election.
+func (r *Raft) TransferLeadershipInternal(targetNodeID NodeID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.state != Leader {
+		return ErrNotLeader
+	}
+
+	// Can't transfer to self
+	if targetNodeID == r.id {
+		return errors.New("cannot transfer leadership to self")
+	}
+
+	// Check if target is in the cluster
+	found := false
+	for _, p := range r.peers {
+		if p == targetNodeID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("target node not in cluster")
+	}
+
+	// Ensure target is caught up (matchIndex should be at least commitIndex)
+	if matchIdx, ok := r.matchIndex[targetNodeID]; ok {
+		if matchIdx < r.commitIndex {
+			return errors.New("target node is not caught up")
+		}
+	} else {
+		return errors.New("target node not tracked")
+	}
+
+	// Send TimeoutNow RPC to target asynchronously
+	go func() {
+		client, conn, err := r.dialPeer(string(targetNodeID))
+		if err != nil {
+			logging.WithRaftContext(string(r.id), r.term, r.state.String()).
+				Err(err).Str("target", string(targetNodeID)).
+				Msg("failed to dial target for leadership transfer")
+			return
+		}
+		defer conn.Close()
+
+		r.mu.Lock()
+		term := r.term
+		leaderID := r.id
+		r.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		resp, err := client.TimeoutNow(ctx, &raftpb.TimeoutNowRequest{
+			Term:     int32(term),
+			LeaderId: string(leaderID),
+		})
+
+		if err != nil {
+			logging.WithRaftContext(string(r.id), term, r.state.String()).
+				Err(err).Str("target", string(targetNodeID)).
+				Msg("timeout now RPC failed")
+			return
+		}
+
+		// If target has a higher term, we've been superseded
+		r.mu.Lock()
+		if int(resp.Term) > r.term {
+			r.term = int(resp.Term)
+			r.state = Follower
+			r.votedFor = ""
+			r.leader = targetNodeID
+			_ = r.meta.Save(r.term, r.votedFor, r.peers)
+			logging.WithRaftContext(string(r.id), r.term, "follower").
+				Info().Str("new_leader", string(targetNodeID)).
+				Msg("leadership transferred successfully")
+		}
+		r.mu.Unlock()
+	}()
+
+	return nil
 }
 
 // -----------------------------------------------------------------------------

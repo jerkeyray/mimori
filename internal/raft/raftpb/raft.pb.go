@@ -651,6 +651,206 @@ func (x *RemoveNodeResponse) GetError() string {
 	return ""
 }
 
+type TimeoutNowRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
+	LeaderId      string                 `protobuf:"bytes,2,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeoutNowRequest) Reset() {
+	*x = TimeoutNowRequest{}
+	mi := &file_proto_raft_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeoutNowRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeoutNowRequest) ProtoMessage() {}
+
+func (x *TimeoutNowRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeoutNowRequest.ProtoReflect.Descriptor instead.
+func (*TimeoutNowRequest) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TimeoutNowRequest) GetTerm() int32 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *TimeoutNowRequest) GetLeaderId() string {
+	if x != nil {
+		return x.LeaderId
+	}
+	return ""
+}
+
+type TimeoutNowResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeoutNowResponse) Reset() {
+	*x = TimeoutNowResponse{}
+	mi := &file_proto_raft_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeoutNowResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeoutNowResponse) ProtoMessage() {}
+
+func (x *TimeoutNowResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeoutNowResponse.ProtoReflect.Descriptor instead.
+func (*TimeoutNowResponse) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TimeoutNowResponse) GetTerm() int32 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *TimeoutNowResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+type TransferLeadershipRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TargetNodeId  string                 `protobuf:"bytes,1,opt,name=target_node_id,json=targetNodeId,proto3" json:"target_node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransferLeadershipRequest) Reset() {
+	*x = TransferLeadershipRequest{}
+	mi := &file_proto_raft_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferLeadershipRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferLeadershipRequest) ProtoMessage() {}
+
+func (x *TransferLeadershipRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferLeadershipRequest.ProtoReflect.Descriptor instead.
+func (*TransferLeadershipRequest) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TransferLeadershipRequest) GetTargetNodeId() string {
+	if x != nil {
+		return x.TargetNodeId
+	}
+	return ""
+}
+
+type TransferLeadershipResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransferLeadershipResponse) Reset() {
+	*x = TransferLeadershipResponse{}
+	mi := &file_proto_raft_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferLeadershipResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferLeadershipResponse) ProtoMessage() {}
+
+func (x *TransferLeadershipResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferLeadershipResponse.ProtoReflect.Descriptor instead.
+func (*TransferLeadershipResponse) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *TransferLeadershipResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *TransferLeadershipResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_proto_raft_proto protoreflect.FileDescriptor
 
 const file_proto_raft_proto_rawDesc = "" +
@@ -695,14 +895,28 @@ const file_proto_raft_proto_rawDesc = "" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"D\n" +
 	"\x12RemoveNodeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xf1\x02\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"D\n" +
+	"\x11TimeoutNowRequest\x12\x12\n" +
+	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x1b\n" +
+	"\tleader_id\x18\x02 \x01(\tR\bleaderId\"B\n" +
+	"\x12TimeoutNowResponse\x12\x12\n" +
+	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\"A\n" +
+	"\x19TransferLeadershipRequest\x12$\n" +
+	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\"L\n" +
+	"\x1aTransferLeadershipResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\x93\x04\n" +
 	"\x04Raft\x12L\n" +
 	"\rAppendEntries\x12\x1c.raftpb.AppendEntriesRequest\x1a\x1d.raftpb.AppendEntriesResponse\x12F\n" +
 	"\vRequestVote\x12\x1a.raftpb.RequestVoteRequest\x1a\x1b.raftpb.RequestVoteResponse\x12R\n" +
 	"\x0fInstallSnapshot\x12\x1e.raftpb.InstallSnapshotRequest\x1a\x1f.raftpb.InstallSnapshotResponse\x12:\n" +
 	"\aAddNode\x12\x16.raftpb.AddNodeRequest\x1a\x17.raftpb.AddNodeResponse\x12C\n" +
 	"\n" +
-	"RemoveNode\x12\x19.raftpb.RemoveNodeRequest\x1a\x1a.raftpb.RemoveNodeResponseB2Z0github.com/jerkeyray/mimori/internal/raft/raftpbb\x06proto3"
+	"RemoveNode\x12\x19.raftpb.RemoveNodeRequest\x1a\x1a.raftpb.RemoveNodeResponse\x12C\n" +
+	"\n" +
+	"TimeoutNow\x12\x19.raftpb.TimeoutNowRequest\x1a\x1a.raftpb.TimeoutNowResponse\x12[\n" +
+	"\x12TransferLeadership\x12!.raftpb.TransferLeadershipRequest\x1a\".raftpb.TransferLeadershipResponseB2Z0github.com/jerkeyray/mimori/internal/raft/raftpbb\x06proto3"
 
 var (
 	file_proto_raft_proto_rawDescOnce sync.Once
@@ -716,19 +930,23 @@ func file_proto_raft_proto_rawDescGZIP() []byte {
 	return file_proto_raft_proto_rawDescData
 }
 
-var file_proto_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_proto_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_proto_raft_proto_goTypes = []any{
-	(*LogEntry)(nil),                // 0: raftpb.LogEntry
-	(*AppendEntriesRequest)(nil),    // 1: raftpb.AppendEntriesRequest
-	(*AppendEntriesResponse)(nil),   // 2: raftpb.AppendEntriesResponse
-	(*RequestVoteRequest)(nil),      // 3: raftpb.RequestVoteRequest
-	(*RequestVoteResponse)(nil),     // 4: raftpb.RequestVoteResponse
-	(*InstallSnapshotRequest)(nil),  // 5: raftpb.InstallSnapshotRequest
-	(*InstallSnapshotResponse)(nil), // 6: raftpb.InstallSnapshotResponse
-	(*AddNodeRequest)(nil),          // 7: raftpb.AddNodeRequest
-	(*AddNodeResponse)(nil),         // 8: raftpb.AddNodeResponse
-	(*RemoveNodeRequest)(nil),       // 9: raftpb.RemoveNodeRequest
-	(*RemoveNodeResponse)(nil),      // 10: raftpb.RemoveNodeResponse
+	(*LogEntry)(nil),                   // 0: raftpb.LogEntry
+	(*AppendEntriesRequest)(nil),       // 1: raftpb.AppendEntriesRequest
+	(*AppendEntriesResponse)(nil),      // 2: raftpb.AppendEntriesResponse
+	(*RequestVoteRequest)(nil),         // 3: raftpb.RequestVoteRequest
+	(*RequestVoteResponse)(nil),        // 4: raftpb.RequestVoteResponse
+	(*InstallSnapshotRequest)(nil),     // 5: raftpb.InstallSnapshotRequest
+	(*InstallSnapshotResponse)(nil),    // 6: raftpb.InstallSnapshotResponse
+	(*AddNodeRequest)(nil),             // 7: raftpb.AddNodeRequest
+	(*AddNodeResponse)(nil),            // 8: raftpb.AddNodeResponse
+	(*RemoveNodeRequest)(nil),          // 9: raftpb.RemoveNodeRequest
+	(*RemoveNodeResponse)(nil),         // 10: raftpb.RemoveNodeResponse
+	(*TimeoutNowRequest)(nil),          // 11: raftpb.TimeoutNowRequest
+	(*TimeoutNowResponse)(nil),         // 12: raftpb.TimeoutNowResponse
+	(*TransferLeadershipRequest)(nil),  // 13: raftpb.TransferLeadershipRequest
+	(*TransferLeadershipResponse)(nil), // 14: raftpb.TransferLeadershipResponse
 }
 var file_proto_raft_proto_depIdxs = []int32{
 	0,  // 0: raftpb.AppendEntriesRequest.entries:type_name -> raftpb.LogEntry
@@ -737,13 +955,17 @@ var file_proto_raft_proto_depIdxs = []int32{
 	5,  // 3: raftpb.Raft.InstallSnapshot:input_type -> raftpb.InstallSnapshotRequest
 	7,  // 4: raftpb.Raft.AddNode:input_type -> raftpb.AddNodeRequest
 	9,  // 5: raftpb.Raft.RemoveNode:input_type -> raftpb.RemoveNodeRequest
-	2,  // 6: raftpb.Raft.AppendEntries:output_type -> raftpb.AppendEntriesResponse
-	4,  // 7: raftpb.Raft.RequestVote:output_type -> raftpb.RequestVoteResponse
-	6,  // 8: raftpb.Raft.InstallSnapshot:output_type -> raftpb.InstallSnapshotResponse
-	8,  // 9: raftpb.Raft.AddNode:output_type -> raftpb.AddNodeResponse
-	10, // 10: raftpb.Raft.RemoveNode:output_type -> raftpb.RemoveNodeResponse
-	6,  // [6:11] is the sub-list for method output_type
-	1,  // [1:6] is the sub-list for method input_type
+	11, // 6: raftpb.Raft.TimeoutNow:input_type -> raftpb.TimeoutNowRequest
+	13, // 7: raftpb.Raft.TransferLeadership:input_type -> raftpb.TransferLeadershipRequest
+	2,  // 8: raftpb.Raft.AppendEntries:output_type -> raftpb.AppendEntriesResponse
+	4,  // 9: raftpb.Raft.RequestVote:output_type -> raftpb.RequestVoteResponse
+	6,  // 10: raftpb.Raft.InstallSnapshot:output_type -> raftpb.InstallSnapshotResponse
+	8,  // 11: raftpb.Raft.AddNode:output_type -> raftpb.AddNodeResponse
+	10, // 12: raftpb.Raft.RemoveNode:output_type -> raftpb.RemoveNodeResponse
+	12, // 13: raftpb.Raft.TimeoutNow:output_type -> raftpb.TimeoutNowResponse
+	14, // 14: raftpb.Raft.TransferLeadership:output_type -> raftpb.TransferLeadershipResponse
+	8,  // [8:15] is the sub-list for method output_type
+	1,  // [1:8] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
 	1,  // [1:1] is the sub-list for extension extendee
 	0,  // [0:1] is the sub-list for field type_name
@@ -760,7 +982,7 @@ func file_proto_raft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_raft_proto_rawDesc), len(file_proto_raft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

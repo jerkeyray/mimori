@@ -54,6 +54,7 @@ to a MimoriDB node running locally or remotely.`,
 		newLeaderCmd(),
 		newAddNodeCmd(),
 		newRemoveNodeCmd(),
+		newTransferLeadershipCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -557,6 +558,59 @@ func doRemoveNode(nodeID string) error {
 		// Create Raft client
 		raftClient := raftpb.NewRaftClient(client.conn)
 		resp, err := raftClient.RemoveNode(ctx, &raftpb.RemoveNodeRequest{NodeId: nodeID})
+		client.Close()
+
+		if err == nil {
+			if !resp.Success {
+				return fmt.Errorf(resp.Error)
+			}
+			return nil
+		}
+
+		// Check for redirect
+		if leader, ok := extractLeaderAddr(err); ok {
+			addrToUse = leader
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("redirected but still failed")
+}
+
+func newTransferLeadershipCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "transfer-leadership [target-node-id]",
+		Short: "Transfer leadership to another node",
+		Long:  "Gracefully transfer leadership to the specified node. This is useful for maintenance - transfer leadership before shutting down the current leader. The target node must be caught up with the current leader.",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			targetNodeID := args[0]
+			if err := doTransferLeadership(targetNodeID); err != nil {
+				log.Fatalf("transfer-leadership failed: %v", err)
+			}
+			fmt.Printf("Leadership transfer initiated to %s\n", targetNodeID)
+			fmt.Println("The current leader will step down once the target node becomes leader.")
+		},
+	}
+}
+
+func doTransferLeadership(targetNodeID string) error {
+	addrToUse := addr
+	// Use longer timeout for leadership transfer
+	transferTimeout := 15 * time.Second
+
+	for attempt := 0; attempt < 2; attempt++ {
+		client := mustConnectTo(addrToUse)
+		ctx, cancel := context.WithTimeout(context.Background(), transferTimeout)
+		defer cancel()
+
+		// Create Raft client
+		raftClient := raftpb.NewRaftClient(client.conn)
+		resp, err := raftClient.TransferLeadership(ctx, &raftpb.TransferLeadershipRequest{
+			TargetNodeId: targetNodeID,
+		})
 		client.Close()
 
 		if err == nil {

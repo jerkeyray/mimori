@@ -66,6 +66,14 @@ func (c *directClient) RemoveNode(ctx context.Context, in *raftpb.RemoveNodeRequ
 	return c.target.RemoveNode(ctx, in)
 }
 
+func (c *directClient) TimeoutNow(ctx context.Context, in *raftpb.TimeoutNowRequest, opts ...grpc.CallOption) (*raftpb.TimeoutNowResponse, error) {
+	return c.target.TimeoutNow(ctx, in)
+}
+
+func (c *directClient) TransferLeadership(ctx context.Context, in *raftpb.TransferLeadershipRequest, opts ...grpc.CallOption) (*raftpb.TransferLeadershipResponse, error) {
+	return c.target.TransferLeadership(ctx, in)
+}
+
 // noOpCloser is a closer that does nothing
 type noOpCloser struct{}
 

@@ -202,6 +202,37 @@ func (c *MiniCluster) getListener(id string) *bufconn.Listener {
 	return c.listeners[id]
 }
 
+func (c *MiniCluster) GetNode(id string) *Node {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.nodes[id]
+}
+
+func (c *MiniCluster) GetRaftClient(id string) raftpb.RaftClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := c.nodes[id]
+	if n == nil {
+		return nil
+	}
+	lis := c.listeners[id]
+	if lis == nil {
+		return nil
+	}
+	conn, err := grpc.DialContext(
+		context.Background(),
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return lis.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil
+	}
+	return raftpb.NewRaftClient(conn)
+}
+
 func TestEndToEnd_MiniCluster(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 	cluster := NewMiniCluster()
@@ -370,5 +401,322 @@ Loop2:
 
 	if !success {
 		t.Fatalf("Restarted node failed to catch up")
+	}
+}
+
+func TestLeaderTransfer(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+	cluster := NewMiniCluster()
+	ids := []string{"node1", "node2", "node3"}
+
+	// Start all nodes
+	for _, id := range ids {
+		others := []string{}
+		for _, o := range ids {
+			if o != id {
+				others = append(others, o)
+			}
+		}
+		cluster.StartNode(t, id, others)
+	}
+	defer func() {
+		for _, id := range ids {
+			cluster.StopNode(id)
+		}
+	}()
+
+	// Wait for initial leader
+	t.Log("Waiting for initial leader...")
+	var oldLeader *Node
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+Loop:
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for leader")
+		case <-ticker.C:
+			for _, id := range ids {
+				n := cluster.GetNode(id)
+				if n != nil && n.Raft.IsLeader() {
+					oldLeader = n
+					break Loop
+				}
+			}
+		}
+	}
+	t.Logf("Initial leader: %s", oldLeader.ID)
+
+	// Determine target (one of the other nodes)
+	targetID := ""
+	for _, id := range ids {
+		if id != oldLeader.ID {
+			targetID = id
+			break
+		}
+	}
+
+	// Wait a bit for cluster to stabilize
+	time.Sleep(500 * time.Millisecond)
+
+	// Transfer leadership
+	t.Logf("Transferring leadership from %s to %s", oldLeader.ID, targetID)
+	raftClient := cluster.GetRaftClient(oldLeader.ID)
+	if raftClient == nil {
+		t.Fatal("failed to get raft client")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := raftClient.TransferLeadership(ctx, &raftpb.TransferLeadershipRequest{
+		TargetNodeId: targetID,
+	})
+	if err != nil {
+		t.Fatalf("transfer leadership failed: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("transfer leadership rejected: %s", resp.Error)
+	}
+
+	// Wait for transfer to complete
+	t.Log("Waiting for leadership transfer to complete...")
+	timeout = time.After(10 * time.Second)
+	var newLeader *Node
+
+Loop2:
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for new leader")
+		case <-ticker.C:
+			for _, id := range ids {
+				n := cluster.GetNode(id)
+				if n != nil && n.Raft.IsLeader() && id == targetID {
+					newLeader = n
+					break Loop2
+				}
+			}
+		}
+	}
+
+	if newLeader == nil {
+		t.Fatal("no new leader elected after transfer")
+	}
+
+	t.Logf("New leader: %s (term %d)", newLeader.ID, newLeader.Raft.Status().Term)
+
+	// Verify old leader stepped down
+	time.Sleep(200 * time.Millisecond)
+	if oldLeader.Raft.IsLeader() {
+		t.Error("old leader did not step down")
+	}
+
+	// Verify operations work with new leader
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+
+	_, err = newLeader.Client.Put(ctx2, &kv.PutRequest{
+		Key:   []byte("transfer-test"),
+		Value: []byte("success"),
+	})
+	if err != nil {
+		t.Fatalf("put to new leader failed: %v", err)
+	}
+
+	// Verify value
+	getResp, err := newLeader.Client.Get(ctx2, &kv.GetRequest{
+		Key: []byte("transfer-test"),
+	})
+	if err != nil {
+		t.Fatalf("get from new leader failed: %v", err)
+	}
+	if !getResp.Found || string(getResp.Value) != "success" {
+		t.Errorf("expected value 'success', got %v", getResp)
+	}
+}
+
+func TestDynamicMembership_AddRemoveNode(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+	cluster := NewMiniCluster()
+
+	// Start with 2 nodes
+	node1ID := "node1"
+	node2ID := "node2"
+	node3ID := "node3"
+
+	cluster.StartNode(t, node1ID, []string{node2ID})
+	cluster.StartNode(t, node2ID, []string{node1ID})
+	defer func() {
+		cluster.StopNode(node1ID)
+		cluster.StopNode(node2ID)
+		cluster.StopNode(node3ID)
+	}()
+
+	// Wait for leader
+	var leader *Node
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+Loop:
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for leader")
+		case <-ticker.C:
+			for _, id := range []string{node1ID, node2ID} {
+				n := cluster.GetNode(id)
+				if n != nil && n.Raft.IsLeader() {
+					leader = n
+					break Loop
+				}
+			}
+		}
+	}
+	t.Logf("Initial leader: %s", leader.ID)
+
+	// Add node3 dynamically
+	t.Log("Adding node3 to cluster...")
+	raftClient := cluster.GetRaftClient(leader.ID)
+	if raftClient == nil {
+		t.Fatal("failed to get raft client")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	addResp, err := raftClient.AddNode(ctx, &raftpb.AddNodeRequest{
+		NodeId: node3ID,
+	})
+	if err != nil {
+		t.Fatalf("add node failed: %v", err)
+	}
+	if !addResp.Success {
+		t.Fatalf("add node rejected: %s", addResp.Error)
+	}
+
+	// Start node3 (it should join the cluster)
+	cluster.StartNode(t, node3ID, []string{leader.ID})
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify all 3 nodes know about each other
+	for _, id := range []string{node1ID, node2ID, node3ID} {
+		n := cluster.GetNode(id)
+		if n == nil {
+			continue
+		}
+		status := n.Raft.Status()
+		// After adding, peers should include the other 2 nodes
+		// (Note: we can't directly check peers from Status, but we can verify the node is functional)
+		t.Logf("Node %s: state=%s, term=%d", id, status.State, status.Term)
+	}
+
+	// Test data replication to all 3 nodes
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+
+	_, err = leader.Client.Put(ctx2, &kv.PutRequest{
+		Key:   []byte("membership-test"),
+		Value: []byte("replicated"),
+	})
+	if err != nil {
+		t.Fatalf("put failed: %v", err)
+	}
+
+	// Wait for replication
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify all nodes have the data
+	for _, id := range []string{node1ID, node2ID, node3ID} {
+		n := cluster.GetNode(id)
+		if n == nil {
+			continue
+		}
+		val, found, err := n.Store.Get([]byte("membership-test"))
+		if err != nil {
+			t.Errorf("node %s store get error: %v", id, err)
+			continue
+		}
+		if !found || string(val) != "replicated" {
+			t.Errorf("node %s missing or incorrect data: found=%v, val=%s", id, found, string(val))
+		}
+	}
+
+	// Remove node3
+	t.Log("Removing node3 from cluster...")
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel3()
+
+	removeResp, err := raftClient.RemoveNode(ctx3, &raftpb.RemoveNodeRequest{
+		NodeId: node3ID,
+	})
+	if err != nil {
+		t.Fatalf("remove node failed: %v", err)
+	}
+	if !removeResp.Success {
+		t.Fatalf("remove node rejected: %s", removeResp.Error)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Find current leader (might have changed)
+	var currentLeader *Node
+	timeout2 := time.After(5 * time.Second)
+	ticker2 := time.NewTicker(100 * time.Millisecond)
+	defer ticker2.Stop()
+
+Loop3:
+	for {
+		select {
+		case <-timeout2:
+			t.Fatal("timed out waiting for leader after remove")
+		case <-ticker2.C:
+			for _, id := range []string{node1ID, node2ID} {
+				n := cluster.GetNode(id)
+				if n != nil && n.Raft.IsLeader() {
+					currentLeader = n
+					break Loop3
+				}
+			}
+		}
+	}
+
+	// Verify cluster still works with 2 nodes
+	ctx4, cancel4 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel4()
+
+	_, err = currentLeader.Client.Put(ctx4, &kv.PutRequest{
+		Key:   []byte("after-remove"),
+		Value: []byte("still-works"),
+	})
+	if err != nil {
+		t.Fatalf("put after remove failed: %v", err)
+	}
+
+	// Wait for replication
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify remaining nodes have the data (with retries)
+	for _, id := range []string{node1ID, node2ID} {
+		n := cluster.GetNode(id)
+		if n == nil {
+			continue
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		success := false
+		for time.Now().Before(deadline) {
+			val, found, err := n.Store.Get([]byte("after-remove"))
+			if err == nil && found && string(val) == "still-works" {
+				success = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !success {
+			t.Errorf("node %s missing or incorrect data after remove", id)
+		}
 	}
 }

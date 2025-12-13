@@ -19,11 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Raft_AppendEntries_FullMethodName   = "/raftpb.Raft/AppendEntries"
-	Raft_RequestVote_FullMethodName     = "/raftpb.Raft/RequestVote"
-	Raft_InstallSnapshot_FullMethodName = "/raftpb.Raft/InstallSnapshot"
-	Raft_AddNode_FullMethodName         = "/raftpb.Raft/AddNode"
-	Raft_RemoveNode_FullMethodName      = "/raftpb.Raft/RemoveNode"
+	Raft_AppendEntries_FullMethodName      = "/raftpb.Raft/AppendEntries"
+	Raft_RequestVote_FullMethodName        = "/raftpb.Raft/RequestVote"
+	Raft_InstallSnapshot_FullMethodName    = "/raftpb.Raft/InstallSnapshot"
+	Raft_AddNode_FullMethodName            = "/raftpb.Raft/AddNode"
+	Raft_RemoveNode_FullMethodName         = "/raftpb.Raft/RemoveNode"
+	Raft_TimeoutNow_FullMethodName         = "/raftpb.Raft/TimeoutNow"
+	Raft_TransferLeadership_FullMethodName = "/raftpb.Raft/TransferLeadership"
 )
 
 // RaftClient is the client API for Raft service.
@@ -35,6 +37,8 @@ type RaftClient interface {
 	InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error)
 	AddNode(ctx context.Context, in *AddNodeRequest, opts ...grpc.CallOption) (*AddNodeResponse, error)
 	RemoveNode(ctx context.Context, in *RemoveNodeRequest, opts ...grpc.CallOption) (*RemoveNodeResponse, error)
+	TimeoutNow(ctx context.Context, in *TimeoutNowRequest, opts ...grpc.CallOption) (*TimeoutNowResponse, error)
+	TransferLeadership(ctx context.Context, in *TransferLeadershipRequest, opts ...grpc.CallOption) (*TransferLeadershipResponse, error)
 }
 
 type raftClient struct {
@@ -95,6 +99,26 @@ func (c *raftClient) RemoveNode(ctx context.Context, in *RemoveNodeRequest, opts
 	return out, nil
 }
 
+func (c *raftClient) TimeoutNow(ctx context.Context, in *TimeoutNowRequest, opts ...grpc.CallOption) (*TimeoutNowResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TimeoutNowResponse)
+	err := c.cc.Invoke(ctx, Raft_TimeoutNow_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *raftClient) TransferLeadership(ctx context.Context, in *TransferLeadershipRequest, opts ...grpc.CallOption) (*TransferLeadershipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TransferLeadershipResponse)
+	err := c.cc.Invoke(ctx, Raft_TransferLeadership_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftServer is the server API for Raft service.
 // All implementations must embed UnimplementedRaftServer
 // for forward compatibility.
@@ -104,6 +128,8 @@ type RaftServer interface {
 	InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
 	AddNode(context.Context, *AddNodeRequest) (*AddNodeResponse, error)
 	RemoveNode(context.Context, *RemoveNodeRequest) (*RemoveNodeResponse, error)
+	TimeoutNow(context.Context, *TimeoutNowRequest) (*TimeoutNowResponse, error)
+	TransferLeadership(context.Context, *TransferLeadershipRequest) (*TransferLeadershipResponse, error)
 	mustEmbedUnimplementedRaftServer()
 }
 
@@ -128,6 +154,12 @@ func (UnimplementedRaftServer) AddNode(context.Context, *AddNodeRequest) (*AddNo
 }
 func (UnimplementedRaftServer) RemoveNode(context.Context, *RemoveNodeRequest) (*RemoveNodeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveNode not implemented")
+}
+func (UnimplementedRaftServer) TimeoutNow(context.Context, *TimeoutNowRequest) (*TimeoutNowResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TimeoutNow not implemented")
+}
+func (UnimplementedRaftServer) TransferLeadership(context.Context, *TransferLeadershipRequest) (*TransferLeadershipResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TransferLeadership not implemented")
 }
 func (UnimplementedRaftServer) mustEmbedUnimplementedRaftServer() {}
 func (UnimplementedRaftServer) testEmbeddedByValue()              {}
@@ -240,6 +272,42 @@ func _Raft_RemoveNode_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Raft_TimeoutNow_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TimeoutNowRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftServer).TimeoutNow(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Raft_TimeoutNow_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftServer).TimeoutNow(ctx, req.(*TimeoutNowRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Raft_TransferLeadership_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TransferLeadershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftServer).TransferLeadership(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Raft_TransferLeadership_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftServer).TransferLeadership(ctx, req.(*TransferLeadershipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Raft_ServiceDesc is the grpc.ServiceDesc for Raft service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -266,6 +334,14 @@ var Raft_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveNode",
 			Handler:    _Raft_RemoveNode_Handler,
+		},
+		{
+			MethodName: "TimeoutNow",
+			Handler:    _Raft_TimeoutNow_Handler,
+		},
+		{
+			MethodName: "TransferLeadership",
+			Handler:    _Raft_TransferLeadership_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -73,10 +73,31 @@ message RemoveNodeResponse {
     string error = 2;
 }
 
+message TimeoutNowRequest {
+    int32 term = 1;
+    string leader_id = 2;
+}
+
+message TimeoutNowResponse {
+    int32 term = 1;
+    bool success = 2;
+}
+
+message TransferLeadershipRequest {
+    string target_node_id = 1;
+}
+
+message TransferLeadershipResponse {
+    bool success = 1;
+    string error = 2;
+}
+
 service Raft {
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
   rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
   rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
   rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
   rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+  rpc TimeoutNow(TimeoutNowRequest) returns (TimeoutNowResponse);
+  rpc TransferLeadership(TransferLeadershipRequest) returns (TransferLeadershipResponse);
 }

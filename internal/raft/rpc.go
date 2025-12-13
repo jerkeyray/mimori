@@ -288,3 +288,66 @@ func (r *Raft) RemoveNode(ctx context.Context, req *raftpb.RemoveNodeRequest) (*
 
 	return &raftpb.RemoveNodeResponse{Success: true}, nil
 }
+
+// TimeoutNow handles the TimeoutNow RPC request.
+// This is used for leadership transfer - it causes the recipient to immediately
+// start an election without waiting for the election timeout.
+func (r *Raft) TimeoutNow(ctx context.Context, req *raftpb.TimeoutNowRequest) (*raftpb.TimeoutNowResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	resp := &raftpb.TimeoutNowResponse{
+		Term:    int32(r.term),
+		Success: false,
+	}
+
+	// Only accept from current leader
+	if NodeID(req.LeaderId) != r.leader {
+		return resp, nil
+	}
+
+	// Ignore if from a stale term
+	if int(req.Term) < r.term {
+		return resp, nil
+	}
+
+	// Update term if needed
+	if int(req.Term) > r.term {
+		r.term = int(req.Term)
+		r.votedFor = ""
+		r.state = Follower
+		_ = r.meta.Save(r.term, r.votedFor, r.peers)
+	}
+
+	// Immediately start an election
+	// This is safe because we know the leader sent this, meaning we're up-to-date
+	r.startElectionLocked()
+
+	logging.WithRaftContext(string(r.id), r.term, "candidate").
+		Info().Str("triggered_by", req.LeaderId).
+		Msg("timeout now received, starting election for leadership transfer")
+
+	resp.Success = true
+	resp.Term = int32(r.term)
+	return resp, nil
+}
+
+// TransferLeadership handles the gRPC TransferLeadership request.
+func (r *Raft) TransferLeadership(ctx context.Context, req *raftpb.TransferLeadershipRequest) (*raftpb.TransferLeadershipResponse, error) {
+	if !r.IsLeader() {
+		return &raftpb.TransferLeadershipResponse{
+			Success: false,
+			Error:   "not leader",
+		}, nil
+	}
+
+	targetNodeID := NodeID(req.TargetNodeId)
+	if err := r.TransferLeadershipInternal(targetNodeID); err != nil {
+		return &raftpb.TransferLeadershipResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	return &raftpb.TransferLeadershipResponse{Success: true}, nil
+}
