@@ -39,6 +39,7 @@ type Node struct {
 	Conn     *grpc.ClientConn
 	ApplyCtx context.Context
 	Cancel   context.CancelFunc
+	ApplyWg  *sync.WaitGroup // WaitGroup for apply loop cleanup
 }
 
 func NewMiniCluster() *MiniCluster {
@@ -113,7 +114,10 @@ func (c *MiniCluster) StartNode(t *testing.T, id string, peers []string) {
 
 	// 6. Apply Loop
 	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -129,9 +133,24 @@ func (c *MiniCluster) StartNode(t *testing.T, id string, peers []string) {
 					continue
 				}
 				if cmd.Op == raft.CmdPut {
-					store.Put(cmd.Key, cmd.Value)
+					// Wrap in recover to handle store close gracefully
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								// Store might be closed, ignore
+							}
+						}()
+						store.Put(cmd.Key, cmd.Value)
+					}()
 				} else if cmd.Op == raft.CmdDelete {
-					store.Delete(cmd.Key)
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								// Store might be closed, ignore
+							}
+						}()
+						store.Delete(cmd.Key)
+					}()
 				}
 			}
 		}
@@ -146,24 +165,49 @@ func (c *MiniCluster) StartNode(t *testing.T, id string, peers []string) {
 		Conn:     conn,
 		ApplyCtx: ctx,
 		Cancel:   cancel,
+		ApplyWg:  &wg,
 	}
 }
 
 func (c *MiniCluster) StopNode(id string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	n, ok := c.nodes[id]
 	if !ok {
+		c.mu.Unlock()
 		return
 	}
-	n.Cancel() // stop applier
+	c.mu.Unlock()
+
+	// Stop components in order to ensure clean shutdown
+	n.Cancel() // stop applier first
+	
+	// Wait for apply loop to finish (with timeout)
+	if n.ApplyWg != nil {
+		done := make(chan struct{})
+		go func() {
+			n.ApplyWg.Wait()
+			close(done)
+		}()
+		
+		select {
+		case <-done:
+			// Apply loop finished
+		case <-time.After(500 * time.Millisecond):
+			// Timeout - proceed anyway
+		}
+	}
+	
 	n.Raft.Stop()
 	n.Server.Stop()
 	n.Conn.Close()
+	
+	// Close store last (after applier is stopped)
 	n.Store.Close()
+	
+	c.mu.Lock()
 	delete(c.nodes, id)
 	delete(c.listeners, id)
+	c.mu.Unlock()
 }
 
 func (c *MiniCluster) dialRaft(addr string) (raftpb.RaftClient, io.Closer, error) {
@@ -889,4 +933,61 @@ Loop:
 			t.Logf("✓ New leader elected: %s", newLeader.ID)
 		}
 	}
+}
+
+// Helper functions shared across all test files
+
+// waitForLeader waits for a leader to be elected in the cluster.
+func waitForLeader(t *testing.T, cluster *MiniCluster, ids []string, timeout time.Duration) *Node {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			leader := findLeader(cluster, ids)
+			if leader != nil {
+				return leader
+			}
+		default:
+			if time.Now().After(deadline) {
+				return nil
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+// findLeader finds the current leader in the cluster.
+func findLeader(cluster *MiniCluster, ids []string) *Node {
+	for _, id := range ids {
+		node := cluster.GetNode(id)
+		if node != nil && node.Raft.IsLeader() {
+			return node
+		}
+	}
+	return nil
+}
+
+// getAliveNodes returns a list of node IDs that are currently alive.
+func getAliveNodes(cluster *MiniCluster, ids []string) []string {
+	var alive []string
+	for _, id := range ids {
+		if cluster.GetNode(id) != nil {
+			alive = append(alive, id)
+		}
+	}
+	return alive
+}
+
+// findLeaderInGroup finds the leader within a specific group of nodes.
+func findLeaderInGroup(cluster *MiniCluster, group []string) *Node {
+	for _, id := range group {
+		node := cluster.GetNode(id)
+		if node != nil && node.Raft.IsLeader() {
+			return node
+		}
+	}
+	return nil
 }

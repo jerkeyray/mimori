@@ -29,6 +29,26 @@ test:
 test-e2e:
 	go test ./tests -v
 
+# Run all tests (unit + e2e)
+test-all:
+	go test ./... -v
+
+# Run chaos tests
+test-chaos:
+	go test ./tests -v -run TestChaos -timeout 5m
+
+# Run load tests
+test-load:
+	go test ./tests -v -run TestLoad -timeout 5m
+
+# Run network partition tests
+test-partition:
+	go test ./tests -v -run TestNetworkPartition -timeout 5m
+
+# Run stress tests
+test-stress:
+	go test ./tests -v -run TestStress -timeout 5m
+
 # Run specific test
 test-follower-reads:
 	go test ./tests -v -run TestFollowerReads
