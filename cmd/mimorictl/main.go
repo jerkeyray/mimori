@@ -95,16 +95,25 @@ Use --allow-stale to allow reads from followers (may return stale data).`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			key := []byte(args[0])
-			client := mustConnect()
-			defer client.Close()
+			cm := getClientManager()
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
+			var resp *kv.GetResponse
+			err := cm.executeWithRetry(func(leaderAddr string) error {
+				client, err := cm.getKVClient(leaderAddr)
+				if err != nil {
+					return err
+				}
 
-			resp, err := client.Client.Get(ctx, &kv.GetRequest{
-				Key:        key,
-				AllowStale: allowStale,
-			})
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+
+				resp, err = client.Get(ctx, &kv.GetRequest{
+					Key:        key,
+					AllowStale: allowStale,
+				})
+				return err
+			}, 3)
+
 			if err != nil {
 				log.Fatalf("get failed: %v", err)
 			}
@@ -144,13 +153,22 @@ func newHealthCmd() *cobra.Command {
 		Short: "Check if the node is alive",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			client := mustConnect()
-			defer client.Close()
+			cm := getClientManager()
+			leaderAddr, err := cm.getLeader()
+			if err != nil {
+				// Try initial address if leader discovery fails
+				leaderAddr = addr
+			}
+
+			client, err := cm.getKVClient(leaderAddr)
+			if err != nil {
+				log.Fatalf("health check failed: %v", err)
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			resp, err := client.Client.Health(ctx, &kv.HealthRequest{})
+			resp, err := client.Health(ctx, &kv.HealthRequest{})
 			if err != nil {
 				log.Fatalf("health check failed: %v", err)
 			}
@@ -212,57 +230,35 @@ func extractLeaderAddr(err error) (string, bool) {
 }
 
 func doPut(key, val []byte) error {
-	addrToUse := addr // default CLI flag
+	cm := getClientManager()
+	return cm.executeWithRetry(func(leaderAddr string) error {
+		client, err := cm.getKVClient(leaderAddr)
+		if err != nil {
+			return err
+		}
 
-	for attempt := 0; attempt < 2; attempt++ {
-		client := mustConnectTo(addrToUse)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		_, err := client.Client.Put(ctx, &kv.PutRequest{Key: key, Value: val})
-		client.Close()
-
-		if err == nil {
-			return nil
-		}
-
-		// see if this is a "not leader" case
-		if leader, ok := extractLeaderAddr(err); ok {
-			addrToUse = leader
-			continue // retry on leader
-		}
-
+		_, err = client.Put(ctx, &kv.PutRequest{Key: key, Value: val})
 		return err
-	}
-
-	return fmt.Errorf("redirected but still failed")
+	}, 3)
 }
 
 func doDelete(key []byte) error {
-	addrToUse := addr
+	cm := getClientManager()
+	return cm.executeWithRetry(func(leaderAddr string) error {
+		client, err := cm.getKVClient(leaderAddr)
+		if err != nil {
+			return err
+		}
 
-	for attempt := 0; attempt < 2; attempt++ {
-		client := mustConnectTo(addrToUse)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		_, err := client.Client.Delete(ctx, &kv.DeleteRequest{Key: key})
-		client.Close()
-
-		if err == nil {
-			return nil
-		}
-
-		// check redirect
-		if leader, ok := extractLeaderAddr(err); ok {
-			addrToUse = leader
-			continue
-		}
-
+		_, err = client.Delete(ctx, &kv.DeleteRequest{Key: key})
 		return err
-	}
-
-	return fmt.Errorf("redirected but still failed")
+	}, 3)
 }
 
 // same as mustConnect but allows choosing a different target address
@@ -521,71 +517,55 @@ func newRemoveNodeCmd() *cobra.Command {
 }
 
 func doAddNode(nodeID string) error {
-	addrToUse := addr
-	// Use longer timeout for config changes as they need to commit and replicate
+	cm := getClientManager()
 	configTimeout := 10 * time.Second
 
-	for attempt := 0; attempt < 2; attempt++ {
-		client := mustConnectTo(addrToUse)
+	return cm.executeWithRetry(func(leaderAddr string) error {
+		raftClient, err := cm.getRaftClient(leaderAddr)
+		if err != nil {
+			return err
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), configTimeout)
 		defer cancel()
 
-		// Create Raft client
-		raftClient := raftpb.NewRaftClient(client.conn)
 		resp, err := raftClient.AddNode(ctx, &raftpb.AddNodeRequest{NodeId: nodeID})
-		client.Close()
-
-		if err == nil {
-			if !resp.Success {
-				return fmt.Errorf(resp.Error)
-			}
-			return nil
+		if err != nil {
+			return err
 		}
 
-		// Check for redirect
-		if leader, ok := extractLeaderAddr(err); ok {
-			addrToUse = leader
-			continue
+		if !resp.Success {
+			return fmt.Errorf(resp.Error)
 		}
 
-		return err
-	}
-
-	return fmt.Errorf("redirected but still failed")
+		return nil
+	}, 3)
 }
 
 func doRemoveNode(nodeID string) error {
-	addrToUse := addr
-	// Use longer timeout for config changes as they need to commit and replicate
+	cm := getClientManager()
 	configTimeout := 10 * time.Second
 
-	for attempt := 0; attempt < 2; attempt++ {
-		client := mustConnectTo(addrToUse)
+	return cm.executeWithRetry(func(leaderAddr string) error {
+		raftClient, err := cm.getRaftClient(leaderAddr)
+		if err != nil {
+			return err
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), configTimeout)
 		defer cancel()
 
-		// Create Raft client
-		raftClient := raftpb.NewRaftClient(client.conn)
 		resp, err := raftClient.RemoveNode(ctx, &raftpb.RemoveNodeRequest{NodeId: nodeID})
-		client.Close()
-
-		if err == nil {
-			if !resp.Success {
-				return fmt.Errorf(resp.Error)
-			}
-			return nil
+		if err != nil {
+			return err
 		}
 
-		// Check for redirect
-		if leader, ok := extractLeaderAddr(err); ok {
-			addrToUse = leader
-			continue
+		if !resp.Success {
+			return fmt.Errorf(resp.Error)
 		}
 
-		return err
-	}
-
-	return fmt.Errorf("redirected but still failed")
+		return nil
+	}, 3)
 }
 
 func newTransferLeadershipCmd() *cobra.Command {
@@ -606,37 +586,29 @@ func newTransferLeadershipCmd() *cobra.Command {
 }
 
 func doTransferLeadership(targetNodeID string) error {
-	addrToUse := addr
-	// Use longer timeout for leadership transfer
+	cm := getClientManager()
 	transferTimeout := 15 * time.Second
 
-	for attempt := 0; attempt < 2; attempt++ {
-		client := mustConnectTo(addrToUse)
+	return cm.executeWithRetry(func(leaderAddr string) error {
+		raftClient, err := cm.getRaftClient(leaderAddr)
+		if err != nil {
+			return err
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), transferTimeout)
 		defer cancel()
 
-		// Create Raft client
-		raftClient := raftpb.NewRaftClient(client.conn)
 		resp, err := raftClient.TransferLeadership(ctx, &raftpb.TransferLeadershipRequest{
 			TargetNodeId: targetNodeID,
 		})
-		client.Close()
-
-		if err == nil {
-			if !resp.Success {
-				return fmt.Errorf(resp.Error)
-			}
-			return nil
+		if err != nil {
+			return err
 		}
 
-		// Check for redirect
-		if leader, ok := extractLeaderAddr(err); ok {
-			addrToUse = leader
-			continue
+		if !resp.Success {
+			return fmt.Errorf(resp.Error)
 		}
 
-		return err
-	}
-
-	return fmt.Errorf("redirected but still failed")
+		return nil
+	}, 3)
 }
