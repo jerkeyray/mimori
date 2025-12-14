@@ -74,10 +74,7 @@ func (c *directClient) TransferLeadership(ctx context.Context, in *raftpb.Transf
 	return c.target.TransferLeadership(ctx, in)
 }
 
-// noOpCloser is a closer that does nothing
-type noOpCloser struct{}
-
-func (c *noOpCloser) Close() error { return nil }
+// noOpCloser is defined in rpc_client.go
 
 func TestRaft_SingleNode(t *testing.T) {
 	dir := t.TempDir()

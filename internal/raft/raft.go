@@ -28,6 +28,17 @@ const (
 // based on applied entries. Kept small for tests; tune for production loads.
 const snapshotCheckThreshold = 50
 
+// maxEntriesPerBatch is the maximum number of log entries to send in a single
+// AppendEntries RPC. This prevents creating overly large messages and helps
+// with progress tracking. If there are more entries, they will be sent in
+// multiple batches.
+const maxEntriesPerBatch = 100
+
+// maxPipelineInflight is the maximum number of AppendEntries RPCs that can
+// be in-flight concurrently per peer. Pipelining allows better throughput
+// by not waiting for each RPC to complete before sending the next one.
+const maxPipelineInflight = 3
+
 type NodeID string
 
 // Snapshot callbacks provided by KV layer
@@ -77,6 +88,14 @@ type Raft struct {
 
 	snapshotter Snapshotter
 	restorer    SnapshotRestorer
+
+	// Connection pool for gRPC clients (reuse connections to peers)
+	connPool *connectionPool
+
+	// Pipeline tracking: semaphores to limit concurrent AppendEntries per peer
+	// Key: peer NodeID, Value: channel used as semaphore
+	pipelineSemaphores map[NodeID]chan struct{}
+	pipeMu             sync.Mutex // Protects pipelineSemaphores
 }
 
 // -----------------------------------------------------------------------------
@@ -144,9 +163,11 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 
 		meta:          meta,
 		logStore:      logStore,
-		shutdownCh:    make(chan struct{}),
-		snapshotStore: snapStore,
-		snapshot:      snap,
+		shutdownCh:        make(chan struct{}),
+		snapshotStore:     snapStore,
+		snapshot:          snap,
+		connPool:          newConnectionPool(nil), // Will be set by SetDialer if provided
+		pipelineSemaphores: make(map[NodeID]chan struct{}),
 	}
 
 	// Replay configuration changes from committed log entries
@@ -766,6 +787,12 @@ func (r *Raft) RemoveNodeInternal(nodeID NodeID) error {
 
 	// Wait for the configuration change to be committed and applied
 	<-r.AppliedWait(index)
+
+	// Clean up connection pool for the removed node
+	if r.connPool != nil {
+		r.connPool.removeConnection(string(nodeID))
+	}
+
 	return nil
 }
 
@@ -948,7 +975,15 @@ func (r *Raft) TransferLeadershipInternal(targetNodeID NodeID) error {
 // -----------------------------------------------------------------------------
 
 func (r *Raft) SetDialer(d func(addr string) (raftpb.RaftClient, io.Closer, error)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.dialer = d
+	// Update connection pool with custom dialer
+	if r.connPool != nil {
+		r.connPool.dialer = d
+	} else {
+		r.connPool = newConnectionPool(d)
+	}
 }
 
 // runMetricsUpdater periodically updates Prometheus metrics.
@@ -974,5 +1009,9 @@ func (r *Raft) runMetricsUpdater() {
 func (r *Raft) Stop() {
 	r.stopOnce.Do(func() {
 		close(r.shutdownCh)
+		// Close all pooled connections
+		if r.connPool != nil {
+			r.connPool.closeAll()
+		}
 	})
 }
