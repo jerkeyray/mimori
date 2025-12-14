@@ -23,6 +23,7 @@ message PutResponse {
 
 message GetRequest {
   bytes key = 1;
+  bool allow_stale = 2; // If true, allows reads from followers (may return stale data)
 }
 
 message GetResponse {

@@ -85,10 +85,14 @@ func newPutCmd() *cobra.Command {
 
 // newGetCmd creates "get" subcommand: mimorictl get key
 func newGetCmd() *cobra.Command {
-	return &cobra.Command{
+	var allowStale bool
+	cmd := &cobra.Command{
 		Use:   "get [key]",
 		Short: "Fetch a value for a key",
-		Args:  cobra.ExactArgs(1),
+		Long: `Fetch a value for a key from the cluster.
+By default, reads go to the leader for strong consistency.
+Use --allow-stale to allow reads from followers (may return stale data).`,
+		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			key := []byte(args[0])
 			client := mustConnect()
@@ -97,7 +101,10 @@ func newGetCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			resp, err := client.Client.Get(ctx, &kv.GetRequest{Key: key})
+			resp, err := client.Client.Get(ctx, &kv.GetRequest{
+				Key:        key,
+				AllowStale: allowStale,
+			})
 			if err != nil {
 				log.Fatalf("get failed: %v", err)
 			}
@@ -109,6 +116,8 @@ func newGetCmd() *cobra.Command {
 			fmt.Printf("%s\n", string(resp.Value))
 		},
 	}
+	cmd.Flags().BoolVar(&allowStale, "allow-stale", false, "Allow reads from followers (may return stale data)")
+	return cmd
 }
 
 // newDelCmd creates "del" subcommand: mimorictl del key

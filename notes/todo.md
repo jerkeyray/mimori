@@ -2,14 +2,13 @@ High priority — core functionality
 ✅ Dynamic cluster membership [DONE]
 ✅ Add/remove nodes at runtime (Raft membership changes)
 ✅ AddNode() / RemoveNode() RPCs, configuration change log entries
-Leader transfer
-Graceful leader handoff
-Currently: only election-based leadership
-Needed: TransferLeadership() for maintenance
-Follower reads (read-only)
+✅ Leader transfer [DONE]
+✅ Graceful leader handoff
+✅ TransferLeadership() for maintenance
+✅ Follower reads [DONE]
 Allow reads from followers with stale data
-Currently: all reads require leader
-Needed: ReadOnly() mode, lease-based reads
+Lease-based reads (300ms validity after heartbeat)
+CLI flag: --allow-stale for get command
 Client-side improvements
 Automatic leader discovery/redirect
 Connection pooling and retries

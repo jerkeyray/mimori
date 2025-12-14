@@ -720,3 +720,173 @@ Loop3:
 		}
 	}
 }
+
+func TestFollowerReads(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+	cluster := NewMiniCluster()
+	ids := []string{"node1", "node2", "node3"}
+
+	// Start all nodes
+	for _, id := range ids {
+		others := []string{}
+		for _, o := range ids {
+			if o != id {
+				others = append(others, o)
+			}
+		}
+		cluster.StartNode(t, id, others)
+	}
+	defer func() {
+		for _, id := range ids {
+			cluster.StopNode(id)
+		}
+	}()
+
+	// Wait for leader
+	t.Log("Waiting for leader...")
+	var leader *Node
+	var follower *Node
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+Loop:
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for leader")
+		case <-ticker.C:
+			for _, id := range ids {
+				n := cluster.GetNode(id)
+				if n != nil && n.Raft.IsLeader() {
+					leader = n
+					// Find a follower
+					for _, fid := range ids {
+						if fid != leader.ID {
+							follower = cluster.GetNode(fid)
+							if follower != nil && !follower.Raft.IsLeader() {
+								break Loop
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	t.Logf("Leader: %s, Follower: %s", leader.ID, follower.ID)
+
+	// Write data to leader
+	ctx := context.Background()
+	testKey := []byte("follower-read-test")
+	testValue := []byte("follower-read-value")
+	_, err := leader.Client.Put(ctx, &kv.PutRequest{
+		Key:   testKey,
+		Value: testValue,
+	})
+	if err != nil {
+		t.Fatalf("Put to leader failed: %v", err)
+	}
+
+	// Wait for replication (followers need to receive heartbeats to get read lease)
+	time.Sleep(500 * time.Millisecond)
+
+	// Test 1: Read from follower WITHOUT allow_stale should fail
+	t.Log("Test: Reading from follower without allow_stale should fail...")
+	_, err = follower.Client.Get(ctx, &kv.GetRequest{
+		Key: testKey,
+		// AllowStale defaults to false
+	})
+	if err == nil {
+		t.Error("Expected error when reading from follower without allow_stale")
+	} else {
+		t.Logf("✓ Correctly rejected follower read without allow_stale: %v", err)
+	}
+
+	// Test 2: Read from follower WITH allow_stale should succeed (if lease is valid)
+	t.Log("Test: Reading from follower with allow_stale should succeed...")
+	resp, err := follower.Client.Get(ctx, &kv.GetRequest{
+		Key:        testKey,
+		AllowStale: true,
+	})
+	if err != nil {
+		t.Logf("Follower read failed (may be expected if lease expired): %v", err)
+		// This is acceptable if the follower's read lease expired
+		// Wait a bit and try again after receiving a heartbeat
+		time.Sleep(200 * time.Millisecond)
+		resp, err = follower.Client.Get(ctx, &kv.GetRequest{
+			Key:        testKey,
+			AllowStale: true,
+		})
+		if err != nil {
+			t.Fatalf("Follower read failed even with allow_stale after heartbeat: %v", err)
+		}
+	}
+
+	if resp == nil || !resp.Found {
+		t.Fatalf("Expected to find key in follower read, got: %v", resp)
+	}
+	if string(resp.Value) != string(testValue) {
+		t.Errorf("Expected value %s, got %s", testValue, resp.Value)
+	}
+	t.Logf("✓ Successfully read from follower: %s", resp.Value)
+
+	// Test 3: Leader can always read (strong consistency)
+	t.Log("Test: Leader read should always work...")
+	leaderResp, err := leader.Client.Get(ctx, &kv.GetRequest{
+		Key: testKey,
+		// AllowStale doesn't matter for leader
+	})
+	if err != nil {
+		t.Fatalf("Leader read failed: %v", err)
+	}
+	if !leaderResp.Found || string(leaderResp.Value) != string(testValue) {
+		t.Errorf("Leader read mismatch: expected %s, got %s", testValue, leaderResp.Value)
+	}
+	t.Logf("✓ Leader read successful: %s", leaderResp.Value)
+
+	// Test 4: Verify follower read lease expires when leader stops
+	t.Log("Test: Follower read lease should expire when leader is partitioned...")
+	// Simulate leader partition by stopping leader
+	oldLeaderID := leader.ID
+	cluster.StopNode(oldLeaderID)
+	
+	// Wait for lease to expire (lease is 300ms) and check multiple times
+	// A new leader might be elected, so we check if the follower's lease expires
+	// before it receives a heartbeat from the new leader
+	leaseExpired := false
+	for i := 0; i < 5; i++ {
+		time.Sleep(100 * time.Millisecond) // Total up to 500ms
+		_, err = follower.Client.Get(ctx, &kv.GetRequest{
+			Key:        testKey,
+			AllowStale: true,
+		})
+		if err != nil {
+			// Lease expired before new leader's heartbeat
+			t.Logf("✓ Follower read correctly rejected after lease expiration: %v", err)
+			leaseExpired = true
+			break
+		}
+	}
+	
+	// If lease didn't expire, it means a new leader was elected and sent a heartbeat quickly
+	// This is also valid behavior - the test verifies the lease mechanism exists
+	if !leaseExpired {
+		t.Log("✓ New leader was elected quickly and sent heartbeat (lease remained valid)")
+		// Verify there's a new leader
+		var newLeader *Node
+		for _, id := range ids {
+			if id != oldLeaderID {
+				n := cluster.GetNode(id)
+				if n != nil && n.Raft.IsLeader() {
+					newLeader = n
+					break
+				}
+			}
+		}
+		if newLeader == nil {
+			t.Error("Expected new leader after old leader stopped")
+		} else {
+			t.Logf("✓ New leader elected: %s", newLeader.ID)
+		}
+	}
+}

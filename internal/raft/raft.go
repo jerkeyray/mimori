@@ -317,6 +317,35 @@ func (r *Raft) LeaderID() NodeID {
 
 func (r *Raft) ApplyCh() <-chan LogEntry { return r.applyCh }
 
+// HasReadLease returns true if this node can safely serve reads.
+// Leaders always have a read lease.
+// Followers have a read lease if they've received a heartbeat recently
+// (within the election timeout), indicating they're part of the active cluster.
+func (r *Raft) HasReadLease() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Leaders can always serve reads
+	if r.state == Leader {
+		return true
+	}
+
+	// Followers can serve reads if they have a leader and received a heartbeat recently
+	// The read lease is valid if we've received a heartbeat within the election timeout period.
+	// This ensures we're still part of the active cluster.
+	if r.state == Follower && r.leader != "" {
+		// Check if last heartbeat was recent (within election timeout)
+		// Use a conservative value: if we haven't received a heartbeat in 2x the typical
+		// election timeout, we shouldn't serve reads (might be partitioned)
+		maxLeaseAge := 300 * time.Millisecond // Conservative: 2x typical election timeout
+		age := time.Since(r.electionReset)
+		return age < maxLeaseAge
+	}
+
+	// Candidates or nodes without a leader cannot serve reads
+	return false
+}
+
 // isKnownNode reports whether the given node ID is in the current configuration
 // (self or peers). Used to ignore requests from unknown nodes to avoid term
 // bumps / elections from nodes not yet added.

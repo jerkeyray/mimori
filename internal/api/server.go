@@ -26,6 +26,7 @@ type RaftNode interface {
 	Propose(cmdData []byte) (int, error)
 	AppliedWait(index int) <-chan struct{}
 	Status() raft.Status
+	HasReadLease() bool // Returns true if node has valid read lease (leader or follower with recent heartbeat)
 }
 
 // this file defines how our server responds to client commands(mimorictl)
@@ -69,11 +70,33 @@ func (s *Server) Put(ctx context.Context, req *kv.PutRequest) (*kv.PutResponse, 
 }
 
 func (s *Server) Get(ctx context.Context, req *kv.GetRequest) (*kv.GetResponse, error) {
-	// enforce leader reads for strong consistency
-	if !s.raft.IsLeader() {
+	// Check if we can serve this read
+	canServeRead := false
+	
+	if s.raft.IsLeader() {
+		// Leader can always serve reads (strong consistency)
+		canServeRead = true
+	} else if req.AllowStale {
+		// Follower can serve reads if:
+		// 1. Client explicitly allows stale reads (AllowStale = true)
+		// 2. Follower has a valid read lease (recent heartbeat from leader)
+		if s.raft.HasReadLease() {
+			canServeRead = true
+		} else {
+			// No valid lease - redirect to leader
+			return nil, status.Errorf(
+				codes.FailedPrecondition,
+				"follower read lease expired, leader=%s",
+				s.raft.LeaderID(),
+			)
+		}
+	}
+
+	if !canServeRead {
+		// Default: require leader for strong consistency
 		return nil, status.Errorf(
 			codes.FailedPrecondition,
-			"not leader, leader=%s",
+			"not leader, leader=%s (use allow_stale=true for follower reads)",
 			s.raft.LeaderID(),
 		)
 	}
