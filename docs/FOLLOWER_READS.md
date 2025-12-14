@@ -182,7 +182,7 @@ func (s *Server) Get(ctx context.Context, req *kv.GetRequest) {
 
 ## Testing
 
-See `test-follower-reads.sh` for a complete test demonstration.
+See `scripts/tests/follower-reads.sh` for a complete test demonstration.
 
 Key test scenarios:
 

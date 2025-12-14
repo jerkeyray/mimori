@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mimori Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-title">Mimori</div>
+          <div class="brand-subtitle">
+            Leader: <span id="header-leader-id" class="mono">-</span>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="chips">
+            <div class="chip">
+              <span class="chip-label">Term</span>
+              <span id="current-term" class="chip-value mono">-</span>
+            </div>
+            <div class="chip">
+              <span class="chip-label">Nodes</span>
+              <span id="node-count" class="chip-value mono">-</span>
+            </div>
+            <div class="chip">
+              <span class="chip-label">Commit</span>
+              <span id="commit-index" class="chip-value mono">-</span>
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <span id="connection-status" class="pill pill-warn"
+              >Connecting...</span
+            >
+            <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="grid">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Cluster</h2>
+              <div id="nodes-note" class="muted small">
+                Cluster changes are forwarded to the leader. You cannot remove
+                the last peer.
+              </div>
+            </div>
+            <button id="add-node-btn" class="btn btn-primary">Add node</button>
+          </div>
+
+          <div id="nodes-list" class="nodes-list">
+            <!-- Nodes will be populated by JavaScript -->
+          </div>
+
+          <div class="transfer-bar">
+            <input
+              type="text"
+              id="transfer-target"
+              placeholder="Transfer leadership to (e.g. :4004)"
+              class="input"
+            />
+            <button id="transfer-btn" class="btn btn-warning">Transfer</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Key-Value</h2>
+              <div class="muted small">
+                Writes are forwarded to the leader. Using the same key
+                overwrites the old value.
+              </div>
+            </div>
+          </div>
+
+          <div class="kv-grid">
+            <div class="card">
+              <div class="card-title">Put</div>
+              <div class="row">
+                <input
+                  type="text"
+                  id="put-key"
+                  placeholder="Key"
+                  class="input"
+                />
+                <input
+                  type="text"
+                  id="put-value"
+                  placeholder="Value"
+                  class="input"
+                />
+                <button id="put-btn" class="btn btn-primary">Put</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Get</div>
+              <div class="row">
+                <input
+                  type="text"
+                  id="get-key"
+                  placeholder="Key"
+                  class="input"
+                />
+              </div>
+              <div class="row row-between">
+                <label class="checkbox">
+                  <input type="checkbox" id="allow-stale" />
+                  <span>Allow stale reads</span>
+                </label>
+                <button id="get-btn" class="btn btn-primary">Get</button>
+              </div>
+              <div id="get-result" class="result-box"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Delete</div>
+              <div class="row">
+                <input
+                  type="text"
+                  id="del-key"
+                  placeholder="Key"
+                  class="input"
+                />
+                <button id="del-btn" class="btn btn-danger">Delete</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <div id="confirm-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-cancel></div>
+      <div class="modal-card" role="dialog" aria-modal="true">
+        <div id="confirm-title" class="modal-title">Confirm</div>
+        <div id="confirm-message" class="modal-message"></div>
+        <div class="modal-actions">
+          <button id="confirm-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="confirm-ok" class="btn btn-danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

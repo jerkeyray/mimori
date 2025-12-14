@@ -3,6 +3,11 @@ data/
 data1/
 data2/
 data3/
+data-dashboard/
+data-spawn/
+test-data-*/
+test-data-node*/
+test-data-transfer-*/
 *.sst
 *.log
 MANIFEST-*

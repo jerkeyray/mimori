@@ -358,7 +358,9 @@ func (r *Raft) HasReadLease() bool {
 		// Check if last heartbeat was recent (within election timeout)
 		// Use a conservative value: if we haven't received a heartbeat in 2x the typical
 		// election timeout, we shouldn't serve reads (might be partitioned)
-		maxLeaseAge := 300 * time.Millisecond // Conservative: 2x typical election timeout
+		// NOTE: This should track our election timeout; if the election timeout is increased,
+		// this must be increased too.
+		maxLeaseAge := 4 * time.Second
 		age := time.Since(r.electionReset)
 		return age < maxLeaseAge
 	}
@@ -390,7 +392,9 @@ func (r *Raft) isKnownNode(id NodeID) bool {
 // -----------------------------------------------------------------------------
 
 func (r *Raft) randomElectionTimeout() time.Duration {
-	return time.Duration(150+rand.Intn(150)) * time.Millisecond
+	// Local dev + many processes + occasional GC pauses can cause 150-300ms to flap.
+	// Use a more forgiving default.
+	return time.Duration(1500+rand.Intn(1500)) * time.Millisecond
 }
 
 func (r *Raft) runElectionTimer() {
@@ -478,7 +482,8 @@ func (r *Raft) becomeLeaderLocked() {
 	}
 
 	go func() {
-		t := time.NewTicker(75 * time.Millisecond)
+		// Heartbeats must be comfortably below election timeout.
+		t := time.NewTicker(250 * time.Millisecond)
 		defer t.Stop()
 
 		for {
@@ -652,6 +657,17 @@ func (r *Raft) Status() Status {
 	}
 }
 
+// GetPeers returns the list of peer node IDs (excluding self)
+func (r *Raft) GetPeers() []NodeID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	// Return a copy to avoid race conditions
+	peers := make([]NodeID, len(r.peers))
+	copy(peers, r.peers)
+	return peers
+}
+
 type Status struct {
 	ID          string `json:"id"`
 	State       string `json:"state"`
@@ -765,8 +781,12 @@ func (r *Raft) AddNodeInternal(nodeID NodeID) error {
 	r.sendHeartbeats()
 
 	// Wait for the configuration change to be committed and applied
-	<-r.AppliedWait(index)
-	return nil
+	select {
+	case <-r.AppliedWait(index):
+		return nil
+	case <-time.After(5 * time.Second):
+		return errors.New("add node config change timed out")
+	}
 }
 
 // RemoveNodeInternal proposes removing a node from the cluster (internal API).
@@ -786,7 +806,12 @@ func (r *Raft) RemoveNodeInternal(nodeID NodeID) error {
 	r.sendHeartbeats()
 
 	// Wait for the configuration change to be committed and applied
-	<-r.AppliedWait(index)
+	select {
+	case <-r.AppliedWait(index):
+		// ok
+	case <-time.After(5 * time.Second):
+		return errors.New("remove node config change timed out")
+	}
 
 	// Clean up connection pool for the removed node
 	if r.connPool != nil {
@@ -830,7 +855,7 @@ func (r *Raft) proposeConfigChange(changeType ConfigChangeType, nodeID NodeID) (
 
 	// Don't allow removing the last node (would make cluster unavailable)
 	if changeType == ConfigRemoveNode {
-		if len(r.peers) <= 1 {
+		if len(r.peers) <= 0 {
 			return 0, errors.New("cannot remove last peer")
 		}
 		// Check if node exists

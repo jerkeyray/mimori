@@ -42,23 +42,23 @@ Access:
 1. **Build binaries:**
 
    ```bash
-   go build -o mimorid ./cmd/mimorid
-   go build -o mimorictl ./cmd/mimorictl
+   go build -o bin/mimorid ./cmd/mimorid
+   go build -o bin/mimorictl ./cmd/mimorictl
    ```
 
 2. **Start a node:**
 
    ```bash
-   ./mimorid
+   ./bin/mimorid
    # Or with custom settings:
-   MIMORI_ADDR=:4000 MIMORI_DATA=./data1 MIMORI_PEERS=:4001,:4002 ./mimorid
+   MIMORI_ADDR=:4000 MIMORI_DATA=./data1 MIMORI_PEERS=:4001,:4002 ./bin/mimorid
    ```
 
 3. **Use the CLI:**
    ```bash
-   ./mimorictl put key1 value1
-   ./mimorictl get key1
-   ./mimorictl status
+   ./bin/mimorictl put key1 value1
+   ./bin/mimorictl get key1
+   ./bin/mimorictl status
    ```
 
 ## CLI Commands
@@ -127,6 +127,16 @@ go test ./...
 
 # E2E tests
 go test ./tests
+```
+
+### Helpful scripts
+
+```bash
+# Local dashboard (single node)
+bash scripts/dashboard-start.sh
+
+# Reset local data/processes
+bash scripts/reset-cluster.sh
 ```
 
 ### Project Structure

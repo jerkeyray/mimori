@@ -535,7 +535,7 @@ func doAddNode(nodeID string) error {
 		}
 
 		if !resp.Success {
-			return fmt.Errorf(resp.Error)
+			return fmt.Errorf("%s", resp.Error)
 		}
 
 		return nil
@@ -561,7 +561,7 @@ func doRemoveNode(nodeID string) error {
 		}
 
 		if !resp.Success {
-			return fmt.Errorf(resp.Error)
+			return fmt.Errorf("%s", resp.Error)
 		}
 
 		return nil
@@ -606,7 +606,7 @@ func doTransferLeadership(targetNodeID string) error {
 		}
 
 		if !resp.Success {
-			return fmt.Errorf(resp.Error)
+			return fmt.Errorf("%s", resp.Error)
 		}
 
 		return nil

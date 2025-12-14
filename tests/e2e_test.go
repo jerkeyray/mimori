@@ -894,12 +894,19 @@ Loop:
 	oldLeaderID := leader.ID
 	cluster.StopNode(oldLeaderID)
 	
-	// Wait for lease to expire (lease is 300ms) and check multiple times
-	// A new leader might be elected, so we check if the follower's lease expires
-	// before it receives a heartbeat from the new leader
+	// Wait for either:
+	// - follower lease expiration (read should fail), OR
+	// - a new leader election + heartbeat (lease stays valid)
+	//
+	// NOTE: election timeouts and lease durations are not tiny in this codebase
+	// (local dev stability), so we allow a few seconds here.
 	leaseExpired := false
-	for i := 0; i < 5; i++ {
-		time.Sleep(100 * time.Millisecond) // Total up to 500ms
+	newLeaderElected := false
+	var newLeader *Node
+	deadline := time.Now().Add(6 * time.Second)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(250 * time.Millisecond)
 		_, err = follower.Client.Get(ctx, &kv.GetRequest{
 			Key:        testKey,
 			AllowStale: true,
@@ -910,29 +917,33 @@ Loop:
 			leaseExpired = true
 			break
 		}
-	}
-	
-	// If lease didn't expire, it means a new leader was elected and sent a heartbeat quickly
-	// This is also valid behavior - the test verifies the lease mechanism exists
-	if !leaseExpired {
-		t.Log("✓ New leader was elected quickly and sent heartbeat (lease remained valid)")
-		// Verify there's a new leader
-		var newLeader *Node
+
+		// If it didn't error, check if another node has become leader yet.
 		for _, id := range ids {
-			if id != oldLeaderID {
-				n := cluster.GetNode(id)
-				if n != nil && n.Raft.IsLeader() {
-					newLeader = n
-					break
-				}
+			if id == oldLeaderID {
+				continue
+			}
+			n := cluster.GetNode(id)
+			if n != nil && n.Raft.IsLeader() {
+				newLeader = n
+				newLeaderElected = true
+				break
 			}
 		}
-		if newLeader == nil {
-			t.Error("Expected new leader after old leader stopped")
-		} else {
-			t.Logf("✓ New leader elected: %s", newLeader.ID)
+		if newLeaderElected {
+			break
 		}
 	}
+	
+	if leaseExpired {
+		return
+	}
+	if newLeaderElected && newLeader != nil {
+		t.Logf("✓ New leader elected and follower stayed readable (lease valid): %s", newLeader.ID)
+		return
+	}
+
+	t.Error("Expected follower lease to expire or a new leader to be elected after old leader stopped")
 }
 
 // Helper functions shared across all test files
