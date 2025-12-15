@@ -57,6 +57,13 @@ go build -o mimorictl ./cmd/mimorictl
 ./mimorictl --addr localhost:4000 put key1 value1
 ./mimorictl --addr localhost:4000 get key1
 
+# Allow follower reads (may be stale)
+./mimorictl --addr localhost:4000 get key1 --allow-stale
+
+# Provide multiple seed nodes (comma-separated) for leader discovery / failover
+./mimorictl --addr localhost:4002,localhost:4000,localhost:4004 status
+./mimorictl --addr localhost:4002,localhost:4000 put key2 value2
+
 # Check status
 ./mimorictl --addr localhost:4000 status
 ./mimorictl --addr localhost:4000 leader

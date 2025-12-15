@@ -4,11 +4,16 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 )
 
 func TestCluster_HealthCheck(t *testing.T) {
+	if os.Getenv("MIMORI_ENABLE_NET_TESTS") == "" {
+		t.Skip("network tests disabled in sandbox; set MIMORI_ENABLE_NET_TESTS=1 to enable")
+	}
+
 	// Start a mock HTTP server for a peer
 	// We need to control the port.
 

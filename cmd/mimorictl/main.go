@@ -40,7 +40,12 @@ to a MimoriDB node running locally or remotely.`,
 	}
 
 	// Global flag to specify which node to talk to
-	rootCmd.PersistentFlags().StringVar(&addr, "addr", "127.0.0.1:4000", "address of Mimori node")
+	rootCmd.PersistentFlags().StringVar(
+		&addr,
+		"addr",
+		"127.0.0.1:4000",
+		"comma-separated gRPC addresses to seed discovery (e.g. 127.0.0.1:4002,127.0.0.1:4000)",
+	)
 
 	// Add subcommands
 	rootCmd.AddCommand(
@@ -287,25 +292,7 @@ func newStatusCmd() *cobra.Command {
 		Long:  "Display detailed Raft status including node ID, state, term, commit index, and log length",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			httpPort := getHTTPPort()
-			url := fmt.Sprintf("http://%s:%d/raft/status", getHTTPHost(), httpPort)
-
-			client := http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Get(url)
-			if err != nil {
-				log.Fatalf("failed to fetch status: %v", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
-				log.Fatalf("status check failed: %s", string(body))
-			}
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Fatalf("failed to read response: %v", err)
-			}
+			body := mustHTTPGetFromSeeds("/raft/status", 2*time.Second)
 
 			// Pretty print JSON
 			var status map[string]interface{}
@@ -332,8 +319,9 @@ func newSnapshotCmd() *cobra.Command {
 		Long:  "Trigger snapshot creation on the leader node. This compacts the log and creates a checkpoint.",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			httpPort := getHTTPPort()
-			url := fmt.Sprintf("http://%s:%d/raft/snapshot", getHTTPHost(), httpPort)
+			leaderGRPC := mustDiscoverLeaderFromSeeds()
+			leaderHTTP := getHTTPAddr(leaderGRPC)
+			url := fmt.Sprintf("http://%s/raft/snapshot", leaderHTTP)
 
 			client := http.Client{Timeout: 5 * time.Second}
 			req, _ := http.NewRequest(http.MethodPost, url, nil)
@@ -357,7 +345,6 @@ func newSnapshotCmd() *cobra.Command {
 			if resp.StatusCode != http.StatusOK {
 				log.Fatalf("snapshot failed: %s", string(body))
 			}
-
 			fmt.Println("Snapshot created successfully")
 		},
 	}
@@ -370,20 +357,7 @@ func newMetricsCmd() *cobra.Command {
 		Long:  "Display important Raft metrics in a readable format",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			httpPort := getHTTPPort()
-			url := fmt.Sprintf("http://%s:%d/metrics", getHTTPHost(), httpPort)
-
-			client := http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Get(url)
-			if err != nil {
-				log.Fatalf("failed to fetch metrics: %v", err)
-			}
-			defer resp.Body.Close()
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Fatalf("failed to read response: %v", err)
-			}
+			body := mustHTTPGetFromSeeds("/metrics", 2*time.Second)
 
 			// Parse Prometheus metrics and show key ones
 			lines := strings.Split(string(body), "\n")
@@ -418,21 +392,7 @@ func newLeaderCmd() *cobra.Command {
 		Short: "Show current leader information",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			httpPort := getHTTPPort()
-			url := fmt.Sprintf("http://%s:%d/raft/status", getHTTPHost(), httpPort)
-
-			client := http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Get(url)
-			if err != nil {
-				log.Fatalf("failed to fetch status: %v", err)
-			}
-			defer resp.Body.Close()
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Fatalf("failed to read response: %v", err)
-			}
-
+			body := mustHTTPGetFromSeeds("/raft/status", 2*time.Second)
 			var status map[string]interface{}
 			if err := json.Unmarshal(body, &status); err != nil {
 				log.Fatalf("failed to parse status: %v", err)
@@ -465,23 +425,93 @@ func portToInt(p string) int {
 }
 
 // Helper functions for HTTP endpoints
-func getHTTPHost() string {
-	host, _, ok := strings.Cut(addr, ":")
-	if !ok {
-		return "127.0.0.1"
+func seedAddrs() []string {
+	seeds := splitAddrList(addr)
+	if len(seeds) == 0 && strings.TrimSpace(addr) != "" {
+		return []string{strings.TrimSpace(addr)}
 	}
-	if host == "" {
-		return "127.0.0.1"
-	}
-	return host
+	return seeds
 }
 
-func getHTTPPort() int {
-	_, port, ok := strings.Cut(addr, ":")
-	if !ok {
-		log.Fatalf("invalid addr format: %s", addr)
+func mustHTTPGetFromSeeds(path string, timeout time.Duration) []byte {
+	seeds := seedAddrs()
+	if len(seeds) == 0 {
+		log.Fatalf("no --addr provided")
 	}
-	return portToInt(port) + 1
+
+	client := http.Client{Timeout: timeout}
+	var lastErr error
+	for _, seed := range seeds {
+		httpAddr := getHTTPAddr(seed)
+		url := fmt.Sprintf("http://%s%s", httpAddr, path)
+		resp, err := client.Get(url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		b, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("http %d: %s", resp.StatusCode, string(b))
+			continue
+		}
+		return b
+	}
+	log.Fatalf("failed to fetch %s from any seed: %v", path, lastErr)
+	return nil
+}
+
+func mustDiscoverLeaderFromSeeds() string {
+	seeds := seedAddrs()
+	if len(seeds) == 0 {
+		log.Fatalf("no --addr provided")
+	}
+
+	type raftStatus struct {
+		State    string `json:"state"`
+		LeaderID string `json:"leader_id"`
+	}
+
+	client := http.Client{Timeout: 2 * time.Second}
+	var lastErr error
+	for _, seed := range seeds {
+		httpAddr := getHTTPAddr(seed)
+		url := fmt.Sprintf("http://%s/raft/status", httpAddr)
+		resp, err := client.Get(url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("http %d: %s", resp.StatusCode, string(body))
+			continue
+		}
+
+		var st raftStatus
+		if err := json.Unmarshal(body, &st); err != nil {
+			lastErr = err
+			continue
+		}
+		if strings.EqualFold(st.State, "leader") {
+			return seed
+		}
+		if st.LeaderID != "" {
+			return normalizeLeaderAddr(seed, st.LeaderID)
+		}
+		lastErr = fmt.Errorf("seed %s does not know leader", seed)
+	}
+	log.Fatalf("failed to discover leader from any seed: %v", lastErr)
+	return ""
 }
 
 func newAddNodeCmd() *cobra.Command {
