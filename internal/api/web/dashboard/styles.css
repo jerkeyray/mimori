@@ -284,7 +284,7 @@ h2 {
   margin-left: 8px;
   padding: 3px 7px;
   border-radius: 999px;
-  border: 1px solid rgba(52, 211, 153, 0.30);
+  border: 1px solid rgba(52, 211, 153, 0.3);
   background: rgba(52, 211, 153, 0.12);
   color: rgba(255, 255, 255, 0.88);
   font-size: 11px;
@@ -406,7 +406,7 @@ h2 {
   font-weight: 650;
 }
 .row-between .checkbox {
-  margin: 0;
+  margin: 10px 0;
   flex: 1;
   min-width: 0;
 }
@@ -433,6 +433,10 @@ h2 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+#add-node-btn {
+  white-space: nowrap;
 }
 .btn:hover {
   transform: translateY(-1px);
