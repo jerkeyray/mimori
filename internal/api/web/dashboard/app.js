@@ -284,6 +284,9 @@ function updateUI(status) {
   const headerLeaderEl = document.getElementById("header-leader-id");
   if (headerLeaderEl) headerLeaderEl.textContent = leaderId;
 
+  const headerNodeEl = document.getElementById("header-node-id");
+  if (headerNodeEl) headerNodeEl.textContent = status.node_id || "-";
+
   const termEl = document.getElementById("current-term");
   if (termEl) termEl.textContent = String(term);
 

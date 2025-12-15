@@ -96,6 +96,10 @@ body {
   font-size: 13px;
   color: var(--muted);
 }
+.brand-sep {
+  margin: 0 8px;
+  color: rgba(255, 255, 255, 0.35);
+}
 
 .topbar-right {
   display: flex;
