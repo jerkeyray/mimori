@@ -91,7 +91,7 @@ func (r *Raft) sendHeartbeats() {
 		}
 
 		lastIndex := r.lastLogIndex()
-		
+
 		// Collect all pending entries
 		allEntries := make([]*raftpb.LogEntry, 0, lastIndex-prevLogIndex)
 		for idx := nextIdx; idx <= lastIndex; idx++ {
@@ -220,15 +220,15 @@ func (r *Raft) sendBatchesWithPipeline(
 	// Send entries in batches of maxEntriesPerBatch
 	currentPrevIndex := prevLogIndex
 	currentPrevTerm := prevLogTerm
-	
+
 	for i := 0; i < len(allEntries); i += maxEntriesPerBatch {
 		end := i + maxEntriesPerBatch
 		if end > len(allEntries) {
 			end = len(allEntries)
 		}
-		
+
 		batch := allEntries[i:end]
-		
+
 		// Acquire semaphore (limits concurrent in-flight RPCs)
 		select {
 		case sem <- struct{}{}:
@@ -241,25 +241,25 @@ func (r *Raft) sendBatchesWithPipeline(
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		
+
 		// Send batch asynchronously
 		go func(b []*raftpb.LogEntry, prevIdx int, prevTrm int) {
 			defer func() { <-sem }() // Release semaphore when done
-			
+
 			success := r.sendAppendEntriesBatch(peer, term, leaderID, prevIdx, prevTrm, b, freshCommit)
-			
+
 			if !success {
 				// If batch failed, we'll retry on next heartbeat
 				// Don't send remaining batches in this call
 			}
 		}(batch, currentPrevIndex, currentPrevTerm)
-		
+
 		// Update prevIndex and prevTerm for next batch
 		if len(batch) > 0 {
 			currentPrevIndex = int(batch[len(batch)-1].Index)
 			currentPrevTerm = int(batch[len(batch)-1].Term)
 		}
-		
+
 		// Small delay to allow first batch to start before sending next
 		// This helps with pipelining without overwhelming the follower
 		time.Sleep(5 * time.Millisecond)
@@ -286,11 +286,11 @@ func (r *Raft) sendAppendEntriesBatchAsync(
 func (r *Raft) getPipelineSemaphore(peer NodeID) chan struct{} {
 	r.pipeMu.Lock()
 	defer r.pipeMu.Unlock()
-	
+
 	if sem, ok := r.pipelineSemaphores[peer]; ok {
 		return sem
 	}
-	
+
 	// Create new semaphore with capacity maxPipelineInflight
 	sem := make(chan struct{}, maxPipelineInflight)
 	r.pipelineSemaphores[peer] = sem

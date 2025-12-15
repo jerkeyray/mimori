@@ -96,6 +96,10 @@ type Raft struct {
 	// Key: peer NodeID, Value: channel used as semaphore
 	pipelineSemaphores map[NodeID]chan struct{}
 	pipeMu             sync.Mutex // Protects pipelineSemaphores
+
+	// removedFromCluster is set when this node is removed via a committed config change.
+	// Such a node must not campaign in elections or ever act as leader.
+	removedFromCluster bool
 }
 
 // -----------------------------------------------------------------------------
@@ -161,12 +165,12 @@ func New(id NodeID, peers []NodeID, dataDir string) *Raft {
 		waiters:      make(map[int]chan struct{}),
 		logBaseIndex: logBaseIndex,
 
-		meta:          meta,
-		logStore:      logStore,
-		shutdownCh:        make(chan struct{}),
-		snapshotStore:     snapStore,
-		snapshot:          snap,
-		connPool:          newConnectionPool(nil), // Will be set by SetDialer if provided
+		meta:               meta,
+		logStore:           logStore,
+		shutdownCh:         make(chan struct{}),
+		snapshotStore:      snapStore,
+		snapshot:           snap,
+		connPool:           newConnectionPool(nil), // Will be set by SetDialer if provided
 		pipelineSemaphores: make(map[NodeID]chan struct{}),
 	}
 
@@ -327,7 +331,7 @@ func (r *Raft) ForceSnapshot() {
 func (r *Raft) IsLeader() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.state == Leader
+	return r.state == Leader && !r.removedFromCluster
 }
 
 func (r *Raft) LeaderID() NodeID {
@@ -345,6 +349,10 @@ func (r *Raft) ApplyCh() <-chan LogEntry { return r.applyCh }
 func (r *Raft) HasReadLease() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.removedFromCluster {
+		return false
+	}
 
 	// Leaders can always serve reads
 	if r.state == Leader {
@@ -411,6 +419,10 @@ func (r *Raft) runElectionTimer() {
 		}
 
 		r.mu.Lock()
+		if r.removedFromCluster {
+			r.mu.Unlock()
+			continue
+		}
 		if r.state == Leader {
 			r.mu.Unlock()
 			continue
@@ -425,6 +437,9 @@ func (r *Raft) runElectionTimer() {
 }
 
 func (r *Raft) startElectionLocked() {
+	if r.removedFromCluster {
+		return
+	}
 	r.state = Candidate
 	r.term++
 	r.votedFor = r.id
@@ -661,7 +676,7 @@ func (r *Raft) Status() Status {
 func (r *Raft) GetPeers() []NodeID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	// Return a copy to avoid race conditions
 	peers := make([]NodeID, len(r.peers))
 	copy(peers, r.peers)
@@ -729,7 +744,26 @@ func (r *Raft) replayConfigChanges() {
 // Must be called with r.mu held.
 func (r *Raft) applyConfigChangeLocked(isAdd bool, nodeID NodeID) {
 	if nodeID == r.id {
-		// Don't add/remove self
+		// Ignore add-self, but handle remove-self:
+		// If we are removed from the cluster, we should step down and stop campaigning.
+		if isAdd {
+			return
+		}
+
+		r.removedFromCluster = true
+		r.state = Follower
+		r.leader = ""
+		r.votedFor = ""
+		r.votes = 0
+		r.electionReset = time.Now()
+
+		// Drop all peers and replication state.
+		r.peers = nil
+		r.nextIndex = make(map[NodeID]int)
+		r.matchIndex = make(map[NodeID]int)
+
+		// Persist updated configuration (empty peers)
+		_ = r.meta.Save(r.term, r.votedFor, r.peers)
 		return
 	}
 

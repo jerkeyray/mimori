@@ -33,6 +33,12 @@
           </div>
 
           <div class="topbar-actions">
+            <div class="node-picker">
+              <span class="node-picker-label">Node</span>
+              <select id="node-select" class="select">
+                <option value="">Current</option>
+              </select>
+            </div>
             <span id="connection-status" class="pill pill-warn"
               >Connecting...</span
             >
@@ -56,16 +62,6 @@
 
           <div id="nodes-list" class="nodes-list">
             <!-- Nodes will be populated by JavaScript -->
-          </div>
-
-          <div class="transfer-bar">
-            <input
-              type="text"
-              id="transfer-target"
-              placeholder="Transfer leadership to (e.g. :4004)"
-              class="input"
-            />
-            <button id="transfer-btn" class="btn btn-warning">Transfer</button>
           </div>
         </section>
 
@@ -109,13 +105,13 @@
                   placeholder="Key"
                   class="input"
                 />
+                <button id="get-btn" class="btn btn-primary">Get</button>
               </div>
               <div class="row row-between">
                 <label class="checkbox">
                   <input type="checkbox" id="allow-stale" />
                   <span>Allow stale reads</span>
                 </label>
-                <button id="get-btn" class="btn btn-primary">Get</button>
               </div>
               <div id="get-result" class="result-box"></div>
             </div>

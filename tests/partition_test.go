@@ -65,7 +65,7 @@ func TestNetworkPartition_SplitBrain(t *testing.T) {
 
 	t.Log("Creating network partition...")
 	partitionDialer := createPartitionDialer(cluster, groupA, groupB)
-	
+
 	// Apply partition to nodes in group B (they can't see group A)
 	for _, id := range groupB {
 		node := cluster.GetNode(id)
@@ -300,4 +300,3 @@ func restoreFullDialer(cluster *MiniCluster, ids []string) {
 }
 
 // Helper functions are defined in e2e_test.go
-

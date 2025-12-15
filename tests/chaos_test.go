@@ -265,7 +265,7 @@ func TestChaos_LeaderFailures(t *testing.T) {
 
 		// Restart old leader (wait a bit for cleanup)
 		time.Sleep(500 * time.Millisecond)
-		
+
 		others := []string{}
 		for _, o := range ids {
 			if o != leaderID {
@@ -283,4 +283,3 @@ func TestChaos_LeaderFailures(t *testing.T) {
 }
 
 // Helper functions are defined in e2e_test.go
-

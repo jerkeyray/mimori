@@ -230,8 +230,8 @@ func TestStress_ManyConcurrentWrites(t *testing.T) {
 
 	wg.Wait()
 
-	t.Logf("Many concurrent writes: %d successful, %d errors (expected %d)", 
-		atomic.LoadInt64(&totalWrites), 
+	t.Logf("Many concurrent writes: %d successful, %d errors (expected %d)",
+		atomic.LoadInt64(&totalWrites),
 		atomic.LoadInt64(&totalErrors),
 		numWriters*numWritesPerWriter)
 
@@ -248,4 +248,3 @@ func TestStress_ManyConcurrentWrites(t *testing.T) {
 
 	t.Log("Many concurrent writes test completed successfully")
 }
-

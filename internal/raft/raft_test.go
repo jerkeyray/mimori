@@ -86,9 +86,9 @@ func TestRaft_SingleNode(t *testing.T) {
 	// len(peers) is 0. 0/2 = 0.
 	// r.votes = 1 (self). 1 > 0. So it should win.
 
-	// Wait for leader
-	timeout := time.After(2 * time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
+	// Wait for leader (election timeout is randomized and can be up to a few seconds)
+	timeout := time.After(6 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -295,31 +295,37 @@ func TestRaft_InstallSnapshotToFollower(t *testing.T) {
 	net.register(leader)
 	net.register(follower)
 
+	// Election is inherently non-deterministic; either node can become leader.
+	electedLeader := waitForLeader(t, leader, follower)
+	var leaderNode, followerNode *Raft
+	if electedLeader == leader {
+		leaderNode = leader
+		followerNode = follower
+	} else {
+		leaderNode = follower
+		followerNode = leader
+	}
+
 	restoreCh := make(chan []byte, 1)
-	follower.SetSnapshotRestorer(func(data []byte) error {
+	followerNode.SetSnapshotRestorer(func(data []byte) error {
 		restoreCh <- data
 		return nil
 	})
 
-	leader.SetSnapshotter(func() ([]byte, error) {
+	leaderNode.SetSnapshotter(func() ([]byte, error) {
 		return []byte("restorable-state"), nil
 	})
-
-	electedLeader := waitForLeader(t, leader, follower)
-	if electedLeader != leader {
-		t.Fatalf("expected %s to become leader, got %s", leaderID, electedLeader.id)
-	}
 
 	// Append some entries and apply on both nodes
 	var lastIdx int
 	for i := 0; i < 5; i++ {
-		idx, err := leader.Propose([]byte(fmt.Sprintf("data-%d", i)))
+		idx, err := leaderNode.Propose([]byte(fmt.Sprintf("data-%d", i)))
 		if err != nil {
 			t.Fatalf("propose failed: %v", err)
 		}
 		lastIdx = idx
 		select {
-		case <-leader.AppliedWait(idx):
+		case <-leaderNode.AppliedWait(idx):
 		case <-time.After(time.Second):
 			t.Fatalf("timeout applying %d on leader", idx)
 		}
@@ -328,9 +334,9 @@ func TestRaft_InstallSnapshotToFollower(t *testing.T) {
 	// Ensure follower catches up with normal replication
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		follower.mu.Lock()
-		applied := follower.lastApplied
-		follower.mu.Unlock()
+		followerNode.mu.Lock()
+		applied := followerNode.lastApplied
+		followerNode.mu.Unlock()
 
 		if applied >= lastIdx {
 			break
@@ -343,17 +349,17 @@ func TestRaft_InstallSnapshotToFollower(t *testing.T) {
 	}
 
 	// Force a snapshot on the leader
-	leader.ForceSnapshot()
-	if leader.snapshot == nil {
+	leaderNode.ForceSnapshot()
+	if leaderNode.snapshot == nil {
 		t.Fatalf("leader snapshot missing")
 	}
 
 	// Make the leader think follower is far behind
-	leader.mu.Lock()
-	leader.nextIndex[followerID] = leader.snapshot.LastIncludedIndex
-	leader.mu.Unlock()
+	leaderNode.mu.Lock()
+	leaderNode.nextIndex[followerNode.id] = leaderNode.snapshot.LastIncludedIndex
+	leaderNode.mu.Unlock()
 
-	leader.sendHeartbeats()
+	leaderNode.sendHeartbeats()
 
 	select {
 	case data := <-restoreCh:
@@ -364,9 +370,9 @@ func TestRaft_InstallSnapshotToFollower(t *testing.T) {
 		t.Fatal("follower did not receive snapshot")
 	}
 
-	follower.mu.Lock()
-	if follower.lastApplied != leader.snapshot.LastIncludedIndex {
-		t.Fatalf("follower lastApplied=%d expected=%d", follower.lastApplied, leader.snapshot.LastIncludedIndex)
+	followerNode.mu.Lock()
+	if followerNode.lastApplied != leaderNode.snapshot.LastIncludedIndex {
+		t.Fatalf("follower lastApplied=%d expected=%d", followerNode.lastApplied, leaderNode.snapshot.LastIncludedIndex)
 	}
-	follower.mu.Unlock()
+	followerNode.mu.Unlock()
 }

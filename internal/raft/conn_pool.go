@@ -152,4 +152,3 @@ func (p *connectionPool) closeAll() {
 		delete(p.conns, addr)
 	}
 }
-

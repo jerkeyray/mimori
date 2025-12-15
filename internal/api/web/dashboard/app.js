@@ -1,4 +1,4 @@
-// API base URL - automatically uses current host
+// API base URL - uses the node that served this dashboard page
 const API_BASE = window.location.origin;
 
 // State
@@ -154,11 +154,81 @@ async function loadStatus() {
     const status = await response.json();
     currentStatus = status;
     updateUI(status);
+    updateNodeSelector(status);
     updateConnectionStatus("connected");
   } catch (error) {
     console.error("Failed to load status:", error);
     updateConnectionStatus("disconnected");
     showToast("Failed to connect to cluster", "error");
+  }
+}
+
+function httpBaseForNodeID(nodeId) {
+  if (!nodeId) return null;
+  // Node IDs in this repo are typically ":4000" or "localhost:4000".
+  // We compute HTTP port as grpcPort + 1.
+  const parts = String(nodeId).split(":");
+  const portStr = parts[parts.length - 1];
+  const port = parseInt(portStr, 10);
+  if (!Number.isFinite(port) || port <= 0) return null;
+  const httpPort = port + 1;
+  return `${window.location.protocol}//${window.location.hostname}:${httpPort}`;
+}
+
+function updateNodeSelector(status) {
+  const sel = document.getElementById("node-select");
+  if (!sel || !status) return;
+
+  // Populate with cluster nodes (computed http bases). We do NOT do cross-origin fetches;
+  // changing selection navigates to that node's dashboard.
+  const nodes = [];
+  if (Array.isArray(status.peers)) {
+    nodes.push(status.node_id, ...status.peers);
+  } else {
+    nodes.push(status.node_id);
+  }
+
+  const uniq = [];
+  const seen = new Set();
+  for (const n of nodes) {
+    const id = String(n);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    uniq.push(id);
+  }
+
+  // Rebuild options if changed.
+  const currentValue = sel.value;
+  sel.innerHTML = "";
+
+  for (const id of uniq) {
+    const base = httpBaseForNodeID(id);
+    if (!base) continue;
+    const opt = document.createElement("option");
+    opt.value = base;
+    // Keep labels simple: show only the node id (no localhost/host noise).
+    opt.textContent = id;
+    sel.appendChild(opt);
+  }
+
+  // Default selection is the current origin.
+  const origin = window.location.origin;
+  sel.value = uniq.length ? origin : "";
+  if (
+    currentValue &&
+    Array.from(sel.options).some((o) => o.value === currentValue)
+  ) {
+    sel.value = currentValue;
+  }
+
+  if (!sel.dataset.bound) {
+    sel.addEventListener("change", () => {
+      const base = sel.value;
+      if (!base) return;
+      if (base === window.location.origin) return;
+      window.location.href = `${base}/dashboard/`;
+    });
+    sel.dataset.bound = "1";
   }
 }
 
@@ -337,20 +407,28 @@ async function updateNodesList(status) {
         // Do NOT also trust peer-reported is_leader here; a removed node can self-elect in isolation
         // and briefly show up as a "second leader" in the UI.
         const isNodeLeader = node.id === status.leader_id;
-        const canDelete = hasLeader && !isNodeLeader;
+        const isSelf = node.id === status.node_id;
+        const nodeCount = (status.peer_count || 0) + 1;
+        // Allow deleting the leader only if removing it won't drop us into a 1-node cluster.
+        // (i.e., keep at least 2 nodes remaining; avoids "quorum confusion" in tiny clusters.)
+        const canDeleteLeader = nodeCount >= 3;
+        const canDelete = hasLeader && (!isNodeLeader || canDeleteLeader);
         const reachable = node.reachable !== false;
         const stateLabel = reachable ? node.state : "down";
         const badgeClass = reachable ? node.state : "down";
+        const canMakeLeader = hasLeader && reachable && !isNodeLeader;
         const termText =
           typeof node.term === "number" && node.term > 0
             ? `term ${node.term}`
             : "term -";
         return `
-                <div class="node-item ${isNodeLeader ? "leader" : ""}">
-                    <div class="node-info">
+                <div class="node-item ${isNodeLeader ? "leader" : ""} ${
+          isSelf ? "self" : ""
+        }">
+                <div class="node-info">
                         <div class="node-id">${node.id} ${
           isNodeLeader ? '<span class="leader-star">★</span>' : ""
-        }</div>
+        } ${isSelf ? '<span class="self-tag">Current</span>' : ""}</div>
                         <div class="node-meta">
                           <span>${termText}</span>
                           <span>${
@@ -362,6 +440,11 @@ async function updateNodesList(status) {
                         <span class="badge ${badgeClass}">${
           isNodeLeader ? "leader" : stateLabel
         }</span>
+                        ${
+                          canMakeLeader
+                            ? `<button class="btn btn-warning btn-small" onclick="handleMakeLeader('${node.id}')">Make leader</button>`
+                            : '<button class="btn btn-warning btn-small" disabled>Make leader</button>'
+                        }
                         ${
                           canDelete
                             ? `<button class="btn btn-danger btn-small" onclick="handleRemoveNodeFromList('${node.id}')">Delete</button>`
@@ -375,6 +458,37 @@ async function updateNodesList(status) {
   }
 }
 
+async function handleMakeLeader(nodeId) {
+  const ok = await openConfirmModal({
+    title: "Make leader",
+    message: `Transfer leadership to "${nodeId}"?`,
+    okText: "Make leader",
+    okClass: "btn btn-warning",
+  });
+  if (!ok) return;
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/cluster/transfer-leadership`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_node_id: nodeId }),
+      }
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || "Transfer leadership failed");
+    }
+
+    showToast(`Leadership transfer initiated to: ${nodeId}`, "info");
+    setTimeout(loadStatus, 800);
+  } catch (error) {
+    showToast(`Make leader failed: ${error.message}`, "error");
+  }
+}
+
 async function handleRemoveNodeFromList(nodeId) {
   const ok = await openConfirmModal({
     title: "Remove node",
@@ -385,6 +499,48 @@ async function handleRemoveNodeFromList(nodeId) {
   if (!ok) return;
 
   try {
+    // Special-case: removing the current leader is safest if we transfer leadership first.
+    // This avoids cases where the config-change can't be committed because the leader steps down.
+    if (
+      currentStatus &&
+      nodeId === currentStatus.leader_id &&
+      Array.isArray(currentStatus.peers) &&
+      currentStatus.peers.length >= 2
+    ) {
+      const target = currentStatus.peers.find((p) => p && p !== nodeId);
+      if (target) {
+        showToast(`Transferring leadership to ${target}...`, "info");
+        const tr = await fetch(`${API_BASE}/api/cluster/transfer-leadership`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target_node_id: target }),
+        });
+        let trData = null;
+        try {
+          trData = await tr.json();
+        } catch (_) {
+          trData = null;
+        }
+        if (!tr.ok || !trData?.success) {
+          throw new Error(trData?.error || "Transfer leadership failed");
+        }
+
+        // Wait for leader to change
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 400));
+          await loadStatus();
+          if (
+            currentStatus &&
+            currentStatus.leader_id &&
+            currentStatus.leader_id !== nodeId
+          ) {
+            break;
+          }
+        }
+      }
+    }
+
     const currentNodes = await loadNodes();
     const exists = currentNodes.some((n) => n.id === nodeId);
     if (!exists) {

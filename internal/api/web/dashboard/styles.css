@@ -3,8 +3,8 @@
 }
 
 :root {
-  --bg0: #0b1220;
-  --bg1: #0f1b33;
+  --bg0: #050608;
+  --bg1: #07090d;
   --panel: rgba(255, 255, 255, 0.06);
   --panel-border: rgba(255, 255, 255, 0.1);
   --text: rgba(255, 255, 255, 0.92);
@@ -21,6 +21,8 @@
   --shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+
+  --control-h: 36px;
 }
 
 html,
@@ -32,12 +34,12 @@ body {
   color: var(--text);
   background: radial-gradient(
       1200px 800px at 20% 10%,
-      rgba(96, 165, 250, 0.18),
+      rgba(96, 165, 250, 0.08),
       transparent 60%
     ),
     radial-gradient(
       900px 700px at 90% 20%,
-      rgba(251, 113, 133, 0.12),
+      rgba(251, 113, 133, 0.06),
       transparent 60%
     ),
     linear-gradient(180deg, var(--bg0), var(--bg1));
@@ -110,29 +112,69 @@ body {
 }
 .chip {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding: 8px 10px;
   border-radius: 12px;
   border: 1px solid var(--panel-border);
   background: rgba(255, 255, 255, 0.04);
+  min-height: var(--control-h);
 }
 .chip-label {
   font-size: 11px;
   color: var(--muted2);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  line-height: 1;
 }
 .chip-value {
   font-size: 13px;
   color: var(--text);
   font-weight: 650;
+  line-height: 1;
 }
 
 .topbar-actions {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+.node-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  min-height: var(--control-h);
+}
+.node-picker-label {
+  font-size: 11px;
+  color: var(--muted2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 800;
+}
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 14, 24, 0.45);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+  cursor: pointer;
+  height: calc(var(--control-h) - 4px);
+}
+.select:focus {
+  border-color: rgba(96, 165, 250, 0.55);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.18);
 }
 
 .pill {
@@ -142,6 +184,9 @@ body {
   font-weight: 650;
   border: 1px solid var(--panel-border);
   background: rgba(255, 255, 255, 0.04);
+  min-height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
 }
 .pill-ok {
   color: rgba(255, 255, 255, 0.92);
@@ -209,6 +254,14 @@ h2 {
   border-color: rgba(96, 165, 250, 0.55);
   background: rgba(59, 130, 246, 0.16);
 }
+.node-item.self {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.08);
+}
+.node-item.self.leader {
+  border-color: rgba(96, 165, 250, 0.55);
+  background: rgba(59, 130, 246, 0.16);
+}
 .node-info {
   display: flex;
   flex-direction: column;
@@ -221,6 +274,17 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.self-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.30);
+  background: rgba(52, 211, 153, 0.12);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 11px;
+  font-weight: 800;
 }
 .node-meta {
   font-size: 12px;
@@ -326,6 +390,17 @@ h2 {
   color: var(--muted);
   font-size: 13px;
 }
+.checkbox {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  min-height: var(--control-h);
+}
+.checkbox span {
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 650;
+}
 .row-between .checkbox {
   margin: 0;
   flex: 1;
@@ -350,6 +425,10 @@ h2 {
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.08s ease, background 0.2s ease, border-color 0.2s ease;
+  min-height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .btn:hover {
   transform: translateY(-1px);
@@ -417,17 +496,6 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.transfer-bar {
-  margin-top: 12px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.transfer-bar .input {
-  flex: 1;
 }
 
 .toast-container {

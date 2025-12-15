@@ -180,7 +180,7 @@ func (c *MiniCluster) StopNode(id string) {
 
 	// Stop components in order to ensure clean shutdown
 	n.Cancel() // stop applier first
-	
+
 	// Wait for apply loop to finish (with timeout)
 	if n.ApplyWg != nil {
 		done := make(chan struct{})
@@ -188,7 +188,7 @@ func (c *MiniCluster) StopNode(id string) {
 			n.ApplyWg.Wait()
 			close(done)
 		}()
-		
+
 		select {
 		case <-done:
 			// Apply loop finished
@@ -196,14 +196,14 @@ func (c *MiniCluster) StopNode(id string) {
 			// Timeout - proceed anyway
 		}
 	}
-	
+
 	n.Raft.Stop()
 	n.Server.Stop()
 	n.Conn.Close()
-	
+
 	// Close store last (after applier is stopped)
 	n.Store.Close()
-	
+
 	c.mu.Lock()
 	delete(c.nodes, id)
 	delete(c.listeners, id)
@@ -893,7 +893,7 @@ Loop:
 	// Simulate leader partition by stopping leader
 	oldLeaderID := leader.ID
 	cluster.StopNode(oldLeaderID)
-	
+
 	// Wait for either:
 	// - follower lease expiration (read should fail), OR
 	// - a new leader election + heartbeat (lease stays valid)
@@ -934,7 +934,7 @@ Loop:
 			break
 		}
 	}
-	
+
 	if leaseExpired {
 		return
 	}

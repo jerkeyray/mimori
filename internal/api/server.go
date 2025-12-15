@@ -89,7 +89,7 @@ func (s *Server) Put(ctx context.Context, req *kv.PutRequest) (*kv.PutResponse, 
 func (s *Server) Get(ctx context.Context, req *kv.GetRequest) (*kv.GetResponse, error) {
 	// Check if we can serve this read
 	canServeRead := false
-	
+
 	if s.raft.IsLeader() {
 		// Leader can always serve reads (strong consistency)
 		canServeRead = true
@@ -365,9 +365,9 @@ type restAPIHandler struct {
 var spawner = newSpawnManager()
 
 type spawnManager struct {
-	mu      sync.Mutex
-	next    int
-	procs   map[int]*exec.Cmd
+	mu    sync.Mutex
+	next  int
+	procs map[int]*exec.Cmd
 }
 
 func newSpawnManager() *spawnManager {
@@ -738,10 +738,10 @@ func (h *restAPIHandler) handleClusterStatus(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"leader_id":   st.LeaderID,
-		"term":        st.Term,
-		"node_count":  len(peers) + 1,
-		"nodes":       append([]string{st.ID}, convertNodeIDsToStrings(peers)...),
+		"leader_id":  st.LeaderID,
+		"term":       st.Term,
+		"node_count": len(peers) + 1,
+		"nodes":      append([]string{st.ID}, convertNodeIDsToStrings(peers)...),
 	})
 }
 
@@ -915,17 +915,17 @@ func (h *restAPIHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"node_id":       st.ID,
-		"state":         st.State,
-		"term":          st.Term,
-		"leader_id":     st.LeaderID,
-		"commit_index":  st.CommitIndex,
-		"last_applied":  st.LastApplied,
-		"log_length":    st.LogLength,
-		"is_leader":     h.raft.IsLeader(),
+		"node_id":        st.ID,
+		"state":          st.State,
+		"term":           st.Term,
+		"leader_id":      st.LeaderID,
+		"commit_index":   st.CommitIndex,
+		"last_applied":   st.LastApplied,
+		"log_length":     st.LogLength,
+		"is_leader":      h.raft.IsLeader(),
 		"has_read_lease": h.raft.HasReadLease(),
-		"peers":         convertNodeIDsToStrings(peers),
-		"peer_count":    len(peers),
+		"peers":          convertNodeIDsToStrings(peers),
+		"peer_count":     len(peers),
 	})
 }
 
