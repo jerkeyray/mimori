@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -72,9 +73,10 @@ to a MimoriDB node running locally or remotely.`,
 // newPutCmd creates the "put" subcommand: mimorictl put key value
 func newPutCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "put [key] [value]",
-		Short: "Store a key/value pair in the database",
-		Args:  cobra.ExactArgs(2),
+		Use:     "put [key] [value]",
+		Aliases: []string{"p"},
+		Short:   "Store a key/value pair in the database",
+		Args:    cobra.ExactArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
 			key := []byte(args[0])
 			val := []byte(args[1])
@@ -92,8 +94,9 @@ func newPutCmd() *cobra.Command {
 func newGetCmd() *cobra.Command {
 	var allowStale bool
 	cmd := &cobra.Command{
-		Use:   "get [key]",
-		Short: "Fetch a value for a key",
+		Use:     "get [key]",
+		Aliases: []string{"g"},
+		Short:   "Fetch a value for a key",
 		Long: `Fetch a value for a key from the cluster.
 By default, reads go to the leader for strong consistency.
 Use --allow-stale to allow reads from followers (may return stale data).`,
@@ -137,8 +140,9 @@ Use --allow-stale to allow reads from followers (may return stale data).`,
 // newDelCmd creates "del" subcommand: mimorictl del key
 func newDelCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:  "del [key]",
-		Args: cobra.ExactArgs(1),
+		Use:     "del [key]",
+		Aliases: []string{"d"},
+		Args:    cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			key := []byte(args[0])
 
@@ -154,9 +158,10 @@ func newDelCmd() *cobra.Command {
 // newHealthCmd creates "health" subcommand: mimorictl health
 func newHealthCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "health",
-		Short: "Check if the node is alive",
-		Args:  cobra.NoArgs,
+		Use:     "health",
+		Aliases: []string{"h"},
+		Short:   "Check if the node is alive",
+		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			cm := getClientManager()
 			leaderAddr, err := cm.getLeader()
@@ -287,10 +292,11 @@ func mustConnectTo(a string) *clientWrapper {
 
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Show Raft and node status",
-		Long:  "Display detailed Raft status including node ID, state, term, commit index, and log length",
-		Args:  cobra.NoArgs,
+		Use:     "status",
+		Aliases: []string{"st"},
+		Short:   "Show Raft and node status",
+		Long:    "Display detailed Raft status including node ID, state, term, commit index, and log length",
+		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			body := mustHTTPGetFromSeeds("/raft/status", 2*time.Second)
 
@@ -314,10 +320,11 @@ func newStatusCmd() *cobra.Command {
 
 func newSnapshotCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "snapshot",
-		Short: "Force creation of a snapshot",
-		Long:  "Trigger snapshot creation on the leader node. This compacts the log and creates a checkpoint.",
-		Args:  cobra.NoArgs,
+		Use:     "snapshot",
+		Aliases: []string{"snap"},
+		Short:   "Force creation of a snapshot",
+		Long:    "Trigger snapshot creation on the leader node. This compacts the log and creates a checkpoint.",
+		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			leaderGRPC := mustDiscoverLeaderFromSeeds()
 			leaderHTTP := getHTTPAddr(leaderGRPC)
@@ -352,10 +359,11 @@ func newSnapshotCmd() *cobra.Command {
 
 func newMetricsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "metrics",
-		Short: "Show key Prometheus metrics",
-		Long:  "Display important Raft metrics in a readable format",
-		Args:  cobra.NoArgs,
+		Use:     "metrics",
+		Aliases: []string{"m"},
+		Short:   "Show key Prometheus metrics",
+		Long:    "Display important Raft metrics in a readable format",
+		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			body := mustHTTPGetFromSeeds("/metrics", 2*time.Second)
 
@@ -388,9 +396,10 @@ func newMetricsCmd() *cobra.Command {
 
 func newLeaderCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "leader",
-		Short: "Show current leader information",
-		Args:  cobra.NoArgs,
+		Use:     "leader",
+		Aliases: []string{"ldr"},
+		Short:   "Show current leader information",
+		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			body := mustHTTPGetFromSeeds("/raft/status", 2*time.Second)
 			var status map[string]interface{}
@@ -426,9 +435,17 @@ func portToInt(p string) int {
 
 // Helper functions for HTTP endpoints
 func seedAddrs() []string {
-	seeds := splitAddrList(addr)
-	if len(seeds) == 0 && strings.TrimSpace(addr) != "" {
-		return []string{strings.TrimSpace(addr)}
+	// Prefer env-provided seeds (same precedence as client.go)
+	raw := addr
+	if v := os.Getenv("MIMORI_ADDRS"); v != "" {
+		raw = v
+	}
+	if v := os.Getenv("MIMORI_SEEDS"); v != "" {
+		raw = v
+	}
+	seeds := splitAddrList(raw)
+	if len(seeds) == 0 && strings.TrimSpace(raw) != "" {
+		return []string{strings.TrimSpace(raw)}
 	}
 	return seeds
 }
@@ -516,10 +533,11 @@ func mustDiscoverLeaderFromSeeds() string {
 
 func newAddNodeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "add-node [node-id]",
-		Short: "Add a node to the cluster",
-		Long:  "Add a node to the cluster. The node-id should be the address (e.g., :4000) that the new node will use. This command must be run against the leader.",
-		Args:  cobra.ExactArgs(1),
+		Use:     "add-node [node-id]",
+		Aliases: []string{"add"},
+		Short:   "Add a node to the cluster",
+		Long:    "Add a node to the cluster. The node-id should be the address (e.g., :4000) that the new node will use. This command must be run against the leader.",
+		Args:    cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			nodeID := args[0]
 			if err := doAddNode(nodeID); err != nil {
@@ -532,10 +550,11 @@ func newAddNodeCmd() *cobra.Command {
 
 func newRemoveNodeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove-node [node-id]",
-		Short: "Remove a node from the cluster",
-		Long:  "Remove a node from the cluster. This command must be run against the leader. Cannot remove the last remaining peer.",
-		Args:  cobra.ExactArgs(1),
+		Use:     "remove-node [node-id]",
+		Aliases: []string{"rm"},
+		Short:   "Remove a node from the cluster",
+		Long:    "Remove a node from the cluster. This command must be run against the leader. Cannot remove the last remaining peer.",
+		Args:    cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			nodeID := args[0]
 			if err := doRemoveNode(nodeID); err != nil {
@@ -600,10 +619,11 @@ func doRemoveNode(nodeID string) error {
 
 func newTransferLeadershipCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "transfer-leadership [target-node-id]",
-		Short: "Transfer leadership to another node",
-		Long:  "Gracefully transfer leadership to the specified node. This is useful for maintenance - transfer leadership before shutting down the current leader. The target node must be caught up with the current leader.",
-		Args:  cobra.ExactArgs(1),
+		Use:     "transfer-leadership [target-node-id]",
+		Aliases: []string{"tl"},
+		Short:   "Transfer leadership to another node",
+		Long:    "Gracefully transfer leadership to the specified node. This is useful for maintenance - transfer leadership before shutting down the current leader. The target node must be caught up with the current leader.",
+		Args:    cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			targetNodeID := args[0]
 			if err := doTransferLeadership(targetNodeID); err != nil {

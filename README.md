@@ -40,27 +40,74 @@ docker-compose down
 
 ### Build and use the CLI
 
-The Docker image builds `mimorid` (server) only. Build the CLI locally:
+You do **not** have to use a local `./bin` directory if you don’t want to. Use the normal Go workflow:
+
+1. **Install the CLI into your Go bin directory:**
+
+   ```bash
+   # from the repo root
+   go install ./cmd/mimorictl
+
+   # make sure Go's bin dir is on your PATH (usually ~/go/bin)
+   export PATH="$(go env GOPATH)/bin:$PATH"
+   ```
+
+2. **Use the CLI directly:**
+
+   ```bash
+   mimorictl put key1 value1
+   mimorictl get key1
+   ```
+
+   When you change CLI code or pull new changes, just run `go install ./cmd/mimorictl` again; the binary on your PATH will be updated.
+
+If you prefer keeping binaries inside the repo (for local dev), you can still do:
 
 ```bash
 go build -o bin/mimorictl ./cmd/mimorictl
+./bin/mimorictl put key1 value1
 ```
 
-Then point it at any node (or multiple seed nodes) — it will discover the leader automatically:
+#### CLI addressing (seeds, env vars, and aliases)
 
-```bash
-# Provide multiple seed nodes (comma-separated)
-./bin/mimorictl --addr 127.0.0.1:4002,127.0.0.1:4000 status
+- **Leader discovery via seeds**
 
-# Strong write path (will go to leader)
-./bin/mimorictl --addr 127.0.0.1:4002,127.0.0.1:4000 put key1 value1
+  The CLI discovers the leader by talking to one or more seed nodes:
 
-# Strong read (leader)
-./bin/mimorictl --addr 127.0.0.1:4002,127.0.0.1:4000 get key1
+  - **Env-based seeds (nice for day-to-day use with Docker Compose):**
 
-# Follower read (may be stale)
-./bin/mimorictl --addr 127.0.0.1:4002,127.0.0.1:4000 get key1 --allow-stale
-```
+    ```bash
+    export MIMORI_ADDRS=127.0.0.1:4000,127.0.0.1:4002,127.0.0.1:4004
+
+    mimorictl p key1 value1   # uses MIMORI_ADDRS, no --addr needed
+    mimorictl g key1
+    ```
+
+  - **`--addr` flag (overrides env):**
+
+    ```bash
+    mimorictl --addr 127.0.0.1:4000,127.0.0.1:4002 status
+    ```
+
+- **Short aliases for common commands**
+
+  ```bash
+  # KV
+  mimorictl p key value        # put
+  mimorictl g key              # get
+  mimorictl d key              # del
+
+  # Admin
+  mimorictl h                  # health
+  mimorictl st                 # status
+  mimorictl m                  # metrics
+  mimorictl ldr                # leader
+
+  # Cluster management
+  mimorictl add :4002          # add-node :4002
+  mimorictl rm :4002           # remove-node :4002
+  mimorictl tl :4002           # transfer-leadership :4002
+  ```
 
 ### Using the dashboard in containers
 

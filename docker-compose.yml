@@ -3,6 +3,11 @@ services:
   mimori-node1:
     build: .
     container_name: mimori-node1
+    # Publish node1 ports to the host so local tools (mimorictl, browser)
+    # can connect to the cluster entrypoint on 127.0.0.1:4000/4001.
+    ports:
+      - "4000:4000" # gRPC
+      - "4001:4001" # HTTP
     environment:
       - MIMORI_ADDR=:4000
       - MIMORI_NODE_ID=mimori-node1:4000
@@ -14,11 +19,16 @@ services:
       - node1-data:/data
     networks:
       - mimori-network
-    expose:
-      - "4000" # gRPC
-      - "4001" # HTTP
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4001/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:4001/healthz",
+        ]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -27,6 +37,9 @@ services:
   mimori-node2:
     build: .
     container_name: mimori-node2
+    ports:
+      - "4002:4000" # gRPC
+      - "4003:4001" # HTTP
     environment:
       - MIMORI_ADDR=:4000
       - MIMORI_NODE_ID=mimori-node2:4000
@@ -38,11 +51,16 @@ services:
       - node2-data:/data
     networks:
       - mimori-network
-    expose:
-      - "4000"
-      - "4001"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4001/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:4001/healthz",
+        ]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -51,6 +69,9 @@ services:
   mimori-node3:
     build: .
     container_name: mimori-node3
+    ports:
+      - "4004:4000" # gRPC
+      - "4005:4001" # HTTP
     environment:
       - MIMORI_ADDR=:4000
       - MIMORI_NODE_ID=mimori-node3:4000
@@ -62,11 +83,16 @@ services:
       - node3-data:/data
     networks:
       - mimori-network
-    expose:
-      - "4000"
-      - "4001"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4001/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:4001/healthz",
+        ]
       interval: 5s
       timeout: 3s
       retries: 3
