@@ -194,34 +194,93 @@ See `docs/FOLLOWER_READS.md` for the full explanation.
 
 ## Interfaces
 
+### Go Client Library
+
+For **embedding Mimori into your applications**, use the `client` package:
+
+```go
+import "github.com/jerkeyray/mimori/client"
+
+func main() {
+    // Create client with seed addresses (auto leader discovery + connection pooling)
+    c, err := client.New([]string{"localhost:4000", "localhost:4002", "localhost:4004"})
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer c.Close()
+
+    ctx := context.Background()
+
+    // Put (always goes to leader)
+    err = c.Put(ctx, []byte("key"), []byte("value"))
+
+    // Get (strong read from leader)
+    value, found, err := c.Get(ctx, []byte("key"))
+
+    // Get with stale reads allowed (can read from followers)
+    value, found, err = c.GetWithOptions(ctx, []byte("key"), client.GetOptions{
+        AllowStale: true,
+    })
+
+    // Delete (always goes to leader)
+    err = c.Delete(ctx, []byte("key"))
+
+    // Health check
+    err = c.Health(ctx)
+}
+```
+
+**Features:**
+
+- Automatic leader discovery and caching
+- Connection pooling and reuse
+- Automatic retries with exponential backoff
+- Context support for timeouts/cancellation
+- Thread-safe (safe for concurrent use)
+
+**Custom configuration:**
+
+```go
+cfg := client.Config{
+    Seeds:       []string{"localhost:4000"},
+    ConnTimeout: 5 * time.Second,
+    ReqTimeout:  10 * time.Second,
+    MaxRetries:  5,
+}
+c, err := client.NewWithConfig(cfg)
+```
+
+See `client/` package documentation for full API reference.
+
 ### CLI (`mimorictl`)
 
-Build:
-
-```bash
-go build -o bin/mimorictl ./cmd/mimorictl
-```
+For **manual operations** and **scripts**, use the CLI:
 
 Commands:
 
 ```bash
-# KV
+# KV operations
 mimorictl put <key> <value>
 mimorictl get <key>
 mimorictl get <key> --allow-stale
 mimorictl del <key>
 
+# Short aliases
+mimorictl p <key> <value>    # put
+mimorictl g <key>             # get
+mimorictl d <key>             # del
+
 # Ops / admin
-mimorictl health
-mimorictl status
-mimorictl leader
-mimorictl metrics
+mimorictl health             # or: mimorictl h
+mimorictl status             # or: mimorictl st
+mimorictl leader             # or: mimorictl ldr
+mimorictl metrics            # or: mimorictl m
 mimorictl snapshot
 
 # Cluster management (leader operations)
-mimorictl add-node <node-id>
-mimorictl remove-node <node-id>
-mimorictl transfer-leadership <node-id>
+mimorictl add-node <node-id>           # or: mimorictl add <node-id>
+mimorictl remove-node <node-id>        # or: mimorictl rm <node-id>
+mimorictl transfer-leadership <node-id> # or: mimorictl tl <node-id>
 
 # Seed nodes (comma-separated)
 mimorictl --addr 127.0.0.1:4002,127.0.0.1:4000 status
@@ -276,6 +335,121 @@ MIMORI_ADDR=:4000 MIMORI_NODE_ID=:4000 MIMORI_PEERS="" MIMORI_DATA=./data1 ./bin
 
 Note: the HTTP server automatically binds on `:4001` when gRPC is `:4000`.
 
+## Using the Client Library in Your Application
+
+The `client` package makes it simple to use Mimori as a distributed KV store in your Go applications.
+
+### Example: Web session store
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "log"
+    "net/http"
+    "time"
+
+    "github.com/jerkeyray/mimori/client"
+)
+
+type Session struct {
+    UserID    string    `json:"user_id"`
+    ExpiresAt time.Time `json:"expires_at"`
+}
+
+var mimoriClient *client.Client
+
+func main() {
+    // Initialize Mimori client
+    c, err := client.New([]string{"localhost:4000", "localhost:4002", "localhost:4004"})
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer c.Close()
+    mimoriClient = c
+
+    http.HandleFunc("/session", sessionHandler)
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func sessionHandler(w http.ResponseWriter, r *http.Request) {
+    sessionID := r.URL.Query().Get("id")
+    if sessionID == "" {
+        http.Error(w, "missing session id", 400)
+        return
+    }
+
+    ctx := r.Context()
+    key := []byte("session:" + sessionID)
+
+    switch r.Method {
+    case "GET":
+        // Read from followers OK for sessions (slight staleness acceptable)
+        data, found, err := mimoriClient.GetWithOptions(ctx, key, client.GetOptions{
+            AllowStale: true,
+        })
+        if err != nil {
+            http.Error(w, err.Error(), 500)
+            return
+        }
+        if !found {
+            http.Error(w, "session not found", 404)
+            return
+        }
+        w.Header().Set("Content-Type", "application/json")
+        w.Write(data)
+
+    case "POST":
+        var sess Session
+        if err := json.NewDecoder(r.Body).Decode(&sess); err != nil {
+            http.Error(w, "invalid json", 400)
+            return
+        }
+        data, _ := json.Marshal(sess)
+        if err := mimoriClient.Put(ctx, key, data); err != nil {
+            http.Error(w, err.Error(), 500)
+            return
+        }
+        w.WriteHeader(201)
+    }
+}
+```
+
+### Example: Distributed config
+
+```go
+type ConfigStore struct {
+    client *client.Client
+}
+
+func (cs *ConfigStore) GetFeatureFlag(ctx context.Context, flag string) (bool, error) {
+    key := []byte("feature:" + flag)
+
+    // Stale reads OK for feature flags
+    data, found, err := cs.client.GetWithOptions(ctx, key, client.GetOptions{
+        AllowStale: true,
+    })
+    if err != nil {
+        return false, err
+    }
+    if !found {
+        return false, nil
+    }
+    return string(data) == "true", nil
+}
+
+func (cs *ConfigStore) SetFeatureFlag(ctx context.Context, flag string, enabled bool) error {
+    key := []byte("feature:" + flag)
+    val := []byte("false")
+    if enabled {
+        val = []byte("true")
+    }
+    return cs.client.Put(ctx, key, val)
+}
+```
+
 ## Observability
 
 - **Prometheus metrics**: scrape `/metrics` on each node’s HTTP port.
@@ -291,6 +465,8 @@ See `docs/TESTING.md`.
 
 ```text
 cmd/                # binaries (mimorid, mimorictl)
+client/             # Go client library for embedding Mimori in applications
+examples/           # example applications using the client library
 internal/api/       # gRPC + HTTP layer (includes dashboard + REST API)
 internal/raft/      # Raft implementation
 internal/storage/   # Pebble wrapper
