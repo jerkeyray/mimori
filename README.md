@@ -118,7 +118,7 @@ mimorictl get hello
 mimorictl del hello
 ```
 
-The CLI automatically discovers the leader and handles retries.
+The CLI automatically discovers the leader, handles retries, and maps Docker internal hostnames to localhost ports (so it works seamlessly when running outside Docker containers).
 
 **More CLI commands:**
 

@@ -482,6 +482,32 @@ func normalizeLeaderAddr(baseAddr, leaderID string) string {
 		return leaderID
 	}
 
+	// Detect Docker hostnames (mimori-node1, mimori-node2, mimori-node3) and map to external ports
+	if useBaseHost && baseHost != "" && strings.HasPrefix(leaderHost, "mimori-node") {
+		// Map Docker internal ports to external ports:
+		// mimori-node1:4000 -> 127.0.0.1:4000
+		// mimori-node2:4000 -> 127.0.0.1:4002
+		// mimori-node3:4000 -> 127.0.0.1:4004
+		portNum, err := strconv.Atoi(port)
+		if err == nil && portNum == 4000 {
+			var externalPort int
+			switch leaderHost {
+			case "mimori-node1":
+				externalPort = 4000
+			case "mimori-node2":
+				externalPort = 4002
+			case "mimori-node3":
+				externalPort = 4004
+			default:
+				// Unknown node, try to use the port as-is
+				externalPort = portNum
+			}
+			return fmt.Sprintf("%s:%d", baseHost, externalPort)
+		}
+		// If port is not 4000, use it as-is (might be HTTP port or custom)
+		return fmt.Sprintf("%s:%s", baseHost, port)
+	}
+
 	if useBaseHost && baseHost != "" {
 		return fmt.Sprintf("%s:%s", baseHost, port)
 	}
