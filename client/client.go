@@ -245,7 +245,12 @@ func (c *Client) executeWithRetry(ctx context.Context, fn func(context.Context, 
 		if isLeaderError(err) {
 			// Try to extract and normalize leader hint
 			if hinted, ok := extractLeaderHint(err); ok {
-				hinted = normalizeLeaderAddr(leaderAddr, hinted)
+				// Use first seed address as base for normalization (ensures Docker hostname mapping works)
+				baseAddr := leaderAddr
+				if len(c.seeds) > 0 {
+					baseAddr = c.seeds[0]
+				}
+				hinted = normalizeLeaderAddr(baseAddr, hinted)
 				c.mu.Lock()
 				c.leaderAddr = hinted
 				c.mu.Unlock()

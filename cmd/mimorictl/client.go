@@ -382,7 +382,12 @@ func (cm *clientManager) executeWithRetry(
 			// Prefer fast-following the leader hinted in the error (if present),
 			// otherwise clear cached leader and re-discover.
 			if hinted, ok := extractLeaderHint(err); ok {
-				hinted = normalizeLeaderAddr(leaderAddr, hinted)
+				// Use first seed address as base for normalization (ensures Docker hostname mapping works)
+				baseAddr := leaderAddr
+				if len(cm.initialAddrs) > 0 {
+					baseAddr = cm.initialAddrs[0]
+				}
+				hinted = normalizeLeaderAddr(baseAddr, hinted)
 				cm.mu.Lock()
 				cm.leaderAddr = hinted
 				cm.mu.Unlock()

@@ -44,7 +44,7 @@ to a MimoriDB node running locally or remotely.`,
 	rootCmd.PersistentFlags().StringVar(
 		&addr,
 		"addr",
-		"127.0.0.1:4000",
+		"127.0.0.1:4000,127.0.0.1:4002,127.0.0.1:4004",
 		"comma-separated gRPC addresses to seed discovery (e.g. 127.0.0.1:4002,127.0.0.1:4000)",
 	)
 
