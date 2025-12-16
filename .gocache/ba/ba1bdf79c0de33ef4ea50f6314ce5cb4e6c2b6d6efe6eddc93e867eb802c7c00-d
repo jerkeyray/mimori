@@ -1,7 +1,0 @@
-./as.go
-./assertions.go
-./doc.go
-./format_error_special.go
-./message.go
-./redactable.go
-./utilities.go

@@ -1,5 +1,5 @@
 /*
-Package client provides a production-ready Go client library for Mimori distributed key-value store.
+Package client provides a Go client library for Mimori distributed key-value store.
 
 The client automatically handles:
   - Leader discovery via seed nodes

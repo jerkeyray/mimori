@@ -1,8 +1,0 @@
-./errors.go
-./errors.pb.go
-./hintdetail.pb.go
-./markers.go
-./markers.pb.go
-./tags.pb.go
-./testing.go
-./testing.pb.go
