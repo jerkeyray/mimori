@@ -10,9 +10,8 @@ Mimori is a distributed key-value store built in Go implementing the Raft consen
 
 - [Features](#features)
 - [Quick Start](#quick-start)
-  - [Docker Compose (Recommended)](#docker-compose-recommended)
-  - [Using the CLI](#using-the-cli)
-  - [Using the Go Client Library](#using-the-go-client-library)
+- [Using the Go Client Library](#using-the-go-client-library)
+- [Advanced Usage](#advanced-usage)
 - [Architecture](#architecture)
 - [Interfaces](#interfaces)
   - [Go Client Library](#go-client-library)
@@ -60,98 +59,163 @@ Mimori is a distributed key-value store built in Go implementing the Raft consen
 
 ## Quick Start
 
-### Docker Compose (Recommended)
+Get Mimori up and running in 2 minutes with a full 3-node cluster, CLI tool, and web dashboard.
 
-Start a 3-node cluster with monitoring:
-
-```bash
-# Start cluster (runs in background)
-docker-compose up -d
-
-# Check status
-docker-compose ps
-
-# View logs
-docker-compose logs -f
-
-# Stop cluster
-docker-compose down
-```
-
-**Access Points:**
-
-- **Node 1**: gRPC `localhost:4000`, HTTP `localhost:4001`, Dashboard `http://localhost:4001`
-- **Node 2**: gRPC `localhost:4002`, HTTP `localhost:4003`, Dashboard `http://localhost:4003`
-- **Node 3**: gRPC `localhost:4004`, HTTP `localhost:4005`, Dashboard `http://localhost:4005`
-- **Prometheus**: `http://localhost:9090`
-- **Grafana**: `http://localhost:3000` (admin/admin)
-
-### Using the CLI
-
-#### Installation
-
-```bash
-# Install to $GOPATH/bin (recommended)
-go install github.com/jerkeyray/mimori/cmd/mimorictl@latest
-
-# Ensure Go's bin is on your PATH
-export PATH="$(go env GOPATH)/bin:$PATH"
-
-# Verify installation
-mimorictl --help
-```
-
-Or build locally:
+### Step 1: Clone the Repository
 
 ```bash
 git clone https://github.com/jerkeyray/mimori.git
 cd mimori
-make build
-./bin/mimorictl --help
 ```
 
-#### Configuration
+### Step 2: Start the Cluster
 
-Set seed addresses via environment variable (recommended for Docker Compose):
+Start a 3-node cluster with Prometheus and Grafana monitoring:
 
 ```bash
-export MIMORI_ADDRS=127.0.0.1:4000,127.0.0.1:4002,127.0.0.1:4004
+docker-compose up -d
 ```
 
-Or use the `--addr` flag:
+Wait a few seconds for the cluster to initialize. Check that all services are running:
 
 ```bash
-mimorictl --addr 127.0.0.1:4000,127.0.0.1:4002 status
+docker-compose ps
 ```
 
-#### Basic Commands
+### Step 3: Install the CLI Tool
 
 ```bash
-# KV operations
-mimorictl put mykey myvalue
-mimorictl get mykey
-mimorictl get mykey --allow-stale  # read from followers
-mimorictl del mykey
+make install
+```
 
-# Short aliases
-mimorictl p key value    # put
-mimorictl g key          # get
-mimorictl d key          # delete
+This installs `mimorictl` to `$GOPATH/bin`. Make sure it's in your PATH:
 
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+Verify installation:
+
+```bash
+mimorictl --help
+```
+
+### Step 4: Use the CLI
+
+Now you can interact with your cluster:
+
+```bash
+# Check cluster status
+mimorictl status
+
+# Store a key-value pair
+mimorictl put hello world
+
+# Retrieve it
+mimorictl get hello
+
+# Delete it
+mimorictl del hello
+```
+
+The CLI automatically discovers the leader and handles retries.
+
+**More CLI commands:**
+
+```bash
 # Cluster operations
-mimorictl health         # or: mimorictl h
-mimorictl status         # or: mimorictl st
-mimorictl leader         # or: mimorictl ldr
-mimorictl metrics        # or: mimorictl m
+mimorictl health         # Check if nodes are alive
+mimorictl leader         # Show current leader
+mimorictl metrics        # Show Prometheus metrics
 
-# Admin operations (requires leader)
-mimorictl add-node :4006          # or: mimorictl add :4006
-mimorictl remove-node :4006       # or: mimorictl rm :4006
-mimorictl transfer-leadership :4002  # or: mimorictl tl :4002
-mimorictl snapshot
+# Follower reads (optional stale reads for scalability)
+mimorictl get mykey --allow-stale
+
+# Admin operations
+mimorictl add-node :4006              # Add a node
+mimorictl remove-node :4006           # Remove a node
+mimorictl transfer-leadership :4002   # Transfer leadership
+mimorictl snapshot                    # Force snapshot
 ```
 
-### Using the Go Client Library
+**Short aliases:**
+
+- `mimorictl p key value` → put
+- `mimorictl g key` → get
+- `mimorictl d key` → delete
+
+### Step 5: Explore the Web Dashboard
+
+Open your browser and visit the web dashboard:
+
+**http://localhost:4001**
+
+The dashboard lets you:
+
+- View cluster status and topology
+- See which node is the leader
+- Put/get/delete keys via the UI
+- Monitor node health
+- Manage cluster membership
+
+You can access any node's dashboard:
+
+- **Node 1**: http://localhost:4001
+- **Node 2**: http://localhost:4003
+- **Node 3**: http://localhost:4005
+
+### Step 6: View Metrics (Optional)
+
+Check out the monitoring stack:
+
+- **Prometheus**: http://localhost:9090
+- **Grafana**: http://localhost:3000 (login: admin/admin)
+
+Grafana includes pre-configured dashboards showing:
+
+- Request rates and latencies
+- Raft state (leader/follower/term)
+- Storage metrics
+- Cluster health
+
+---
+
+### What You Have Now
+
+A fully functional distributed key-value store with:
+
+- 3-node Raft cluster running locally
+- CLI tool for command-line operations
+- Web dashboard for visual management
+- Prometheus + Grafana for monitoring
+- Automatic leader election and failover
+
+### Try It Out
+
+Test the cluster's fault tolerance:
+
+```bash
+# Kill the leader
+docker-compose stop node1
+
+# Watch a new leader get elected
+mimorictl status
+
+# Data is still accessible
+mimorictl get hello
+```
+
+### Stop the Cluster
+
+When you're done:
+
+```bash
+docker-compose down
+```
+
+---
+
+## Using the Go Client Library
 
 Install the client library in your Go project:
 
@@ -212,6 +276,21 @@ go run main.go
 ```
 
 See [examples/simple/](examples/simple/) for a comprehensive example with stale reads, timeouts, and error handling.
+
+---
+
+## Advanced Usage
+
+### CLI Only Installation
+
+If you already have a Mimori cluster running elsewhere and just need the CLI tool:
+
+```bash
+go install github.com/jerkeyray/mimori/cmd/mimorictl@latest
+
+# Point to your cluster
+mimorictl --addr your-cluster-host:4000 status
+```
 
 ---
 
