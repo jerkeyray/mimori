@@ -1,6 +1,6 @@
 # Mimori Go Client Library
 
-Production-ready Go client for Mimori distributed key-value store.
+Go client library for Mimori distributed key-value store.
 
 ## Features
 

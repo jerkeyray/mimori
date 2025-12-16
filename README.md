@@ -1,208 +1,179 @@
-## Mimori — Distributed Key-Value Store (Raft)
+# Mimori
 
-Mimori is a distributed key-value store built in Go on top of the Raft consensus algorithm. It provides a strongly-consistent write path through the Raft leader, optional follower reads (bounded staleness), dynamic cluster membership, and an ops-friendly HTTP surface (health, status, metrics, and a web dashboard).
+> A distributed key-value store built on Raft consensus
+
+Mimori is a distributed key-value store built in Go implementing the Raft consensus algorithm. It provides strong consistency for writes, optional follower reads for scalability, dynamic cluster membership, and a rich set of interfaces including a Go client library, CLI tool, web dashboard, and REST API.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+  - [Docker Compose (Recommended)](#docker-compose-recommended)
+  - [Using the CLI](#using-the-cli)
+  - [Using the Go Client Library](#using-the-go-client-library)
+- [Architecture](#architecture)
+- [Interfaces](#interfaces)
+  - [Go Client Library](#go-client-library)
+  - [CLI Tool (mimorictl)](#cli-tool-mimorictl)
+  - [Web Dashboard](#web-dashboard)
+  - [HTTP/REST API](#httprest-api)
+- [Building from Source](#building-from-source)
+- [Running Manually](#running-manually)
+- [Configuration](#configuration)
+- [Observability](#observability)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
+- [License](#license)
+
+---
 
 ## Features
 
-- **Raft consensus**: leader election, log replication, snapshots
-- **Strong writes**: `Put`/`Delete` are committed through the leader
-- **Follower reads (optional)**: `Get --allow-stale` can be served by followers with a read-lease
-- **Dynamic membership**: add/remove nodes at runtime via Raft config changes
-- **Leader transfer**: graceful handoff for maintenance
-- **Persistent storage**: Pebble-backed KV state machine
-- **Ops HTTP endpoints**: `/healthz`, `/ready`, `/raft/status`, `/raft/snapshot`, `/metrics`
-- **Web dashboard**: embedded UI served by each node on its HTTP port (includes REST API for cluster + KV)
-- **CLI admin tool**: `mimorictl` for KV and cluster operations with leader discovery + retries
+### Core Capabilities
 
-## Quick start (Docker Compose)
+- **Raft Consensus**: Leader election, log replication, snapshotting
+- **Strong Consistency**: Writes (`Put`/`Delete`) committed through Raft leader
+- **Follower Reads**: Optional stale reads from followers with read leases (bounded staleness)
+- **Persistent Storage**: Pebble-backed KV state machine
+- **Dynamic Membership**: Add/remove nodes at runtime
+- **Leader Transfer**: Graceful leadership handoff for maintenance
+- **gRPC Interface**: High-performance RPC for all cluster operations
 
-Start a 3-node cluster + Prometheus + Grafana:
+### Interfaces
+
+- **Go Client Library**: Full-featured package for embedding in applications
+- **CLI Tool** (`mimorictl`): Command-line administration with leader discovery and auto-retry
+- **Web Dashboard**: Embedded UI for cluster management and KV operations
+- **REST API**: Full HTTP/JSON API for programmatic access
+- **gRPC API**: Direct gRPC access for custom clients
+
+### Operations
+
+- **Health Checks**: `/healthz`, `/ready` endpoints
+- **Metrics**: Prometheus-compatible `/metrics` endpoint
+- **Observability**: Docker Compose setup with Prometheus + Grafana
+
+---
+
+## Quick Start
+
+### Docker Compose (Recommended)
+
+Start a 3-node cluster with monitoring:
 
 ```bash
+# Start cluster (runs in background)
 docker-compose up -d
 
+# Check status
 docker-compose ps
-```
 
-Ports (per node):
+# View logs
+docker-compose logs -f
 
-- **Node 1**: gRPC `localhost:4000`, HTTP `localhost:4001` (dashboard at `http://localhost:4001/`)
-- **Node 2**: gRPC `localhost:4002`, HTTP `localhost:4003` (dashboard at `http://localhost:4003/`)
-- **Node 3**: gRPC `localhost:4004`, HTTP `localhost:4005` (dashboard at `http://localhost:4005/`)
-- **Prometheus**: `http://localhost:9090`
-- **Grafana**: `http://localhost:3000` (admin/admin)
-
-Stop:
-
-```bash
+# Stop cluster
 docker-compose down
 ```
 
-### Build and use the CLI
+**Access Points:**
 
-You do **not** have to use a local `./bin` directory if you don’t want to. Use the normal Go workflow:
+- **Node 1**: gRPC `localhost:4000`, HTTP `localhost:4001`, Dashboard `http://localhost:4001`
+- **Node 2**: gRPC `localhost:4002`, HTTP `localhost:4003`, Dashboard `http://localhost:4003`
+- **Node 3**: gRPC `localhost:4004`, HTTP `localhost:4005`, Dashboard `http://localhost:4005`
+- **Prometheus**: `http://localhost:9090`
+- **Grafana**: `http://localhost:3000` (admin/admin)
 
-1. **Install the CLI into your Go bin directory:**
+### Using the CLI
 
-   ```bash
-   # from the repo root
-   go install ./cmd/mimorictl
-
-   # make sure Go's bin dir is on your PATH (usually ~/go/bin)
-   export PATH="$(go env GOPATH)/bin:$PATH"
-   ```
-
-2. **Use the CLI directly:**
-
-   ```bash
-   mimorictl put key1 value1
-   mimorictl get key1
-   ```
-
-   When you change CLI code or pull new changes, just run `go install ./cmd/mimorictl` again; the binary on your PATH will be updated.
-
-If you prefer keeping binaries inside the repo (for local dev), you can still do:
+#### Installation
 
 ```bash
-go build -o bin/mimorictl ./cmd/mimorictl
-./bin/mimorictl put key1 value1
+# Install to $GOPATH/bin (recommended)
+go install github.com/jerkeyray/mimori/cmd/mimorictl@latest
+
+# Ensure Go's bin is on your PATH
+export PATH="$(go env GOPATH)/bin:$PATH"
+
+# Verify installation
+mimorictl --help
 ```
 
-#### CLI addressing (seeds, env vars, and aliases)
-
-- **Leader discovery via seeds**
-
-  The CLI discovers the leader by talking to one or more seed nodes:
-
-  - **Env-based seeds (nice for day-to-day use with Docker Compose):**
-
-    ```bash
-    export MIMORI_ADDRS=127.0.0.1:4000,127.0.0.1:4002,127.0.0.1:4004
-
-    mimorictl p key1 value1   # uses MIMORI_ADDRS, no --addr needed
-    mimorictl g key1
-    ```
-
-  - **`--addr` flag (overrides env):**
-
-    ```bash
-    mimorictl --addr 127.0.0.1:4000,127.0.0.1:4002 status
-    ```
-
-- **Short aliases for common commands**
-
-  ```bash
-  # KV
-  mimorictl p key value        # put
-  mimorictl g key              # get
-  mimorictl d key              # del
-
-  # Admin
-  mimorictl h                  # health
-  mimorictl st                 # status
-  mimorictl m                  # metrics
-  mimorictl ldr                # leader
-
-  # Cluster management
-  mimorictl add :4002          # add-node :4002
-  mimorictl rm :4002           # remove-node :4002
-  mimorictl tl :4002           # transfer-leadership :4002
-  ```
-
-### Using the dashboard in containers
-
-Each node serves the dashboard on its HTTP port (which is **gRPC port + 1**). Open any of:
-
-- `http://localhost:4001/`
-- `http://localhost:4003/`
-- `http://localhost:4005/`
-
-The root (`/`) redirects to `/dashboard/`.
-
-## Quick start (local single-node dashboard)
-
-For a simple local run (no Docker), use the helper script:
+Or build locally:
 
 ```bash
-bash scripts/dashboard-start.sh
+git clone https://github.com/jerkeyray/mimori.git
+cd mimori
+make build
+./bin/mimorictl --help
 ```
 
-It starts a single node on `:4000` and prints the dashboard URL (`http://localhost:4001/dashboard/`).
+#### Configuration
 
-Stop it with:
+Set seed addresses via environment variable (recommended for Docker Compose):
 
 ```bash
-bash scripts/dashboard-stop.sh
+export MIMORI_ADDRS=127.0.0.1:4000,127.0.0.1:4002,127.0.0.1:4004
 ```
 
-## Architecture
+Or use the `--addr` flag:
 
-### High-level diagram
-
-```text
-┌─────────────┐
-│   Clients   │
-│ (CLI / UI)  │
-└──────┬──────┘
-       │ gRPC (KV + Raft admin)
-       ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Node 1    │◄───►│   Node 2    │◄───►│   Node 3    │
-│  (Leader)   │     │  (Follower) │     │  (Follower) │
-└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-       │                    │                    │
-       │ apply committed log │ apply committed log │ apply committed log
-       ▼                    ▼                    ▼
-┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│  Pebble KV  │       │  Pebble KV  │       │  Pebble KV  │
-└─────────────┘       └─────────────┘       └─────────────┘
-
-(Each node also exposes an HTTP port = gRPC port + 1 for health/status/metrics + dashboard.)
+```bash
+mimorictl --addr 127.0.0.1:4000,127.0.0.1:4002 status
 ```
 
-### What runs inside a node
+#### Basic Commands
 
-- **Raft core** (`internal/raft/`)
-  - Elections, heartbeats, replication, snapshots
-  - Dynamic membership (config change log entries)
-  - Leader transfer
-  - Read lease tracking for follower reads
-- **State machine / storage** (`internal/storage/`)
-  - Pebble-backed KV store
-  - Apply loop consumes committed log entries and mutates the KV store
-- **gRPC API** (`internal/api/`)
-  - KV service: `Put/Get/Delete/Health`
-  - Raft admin service: membership, leader transfer, etc.
-- **HTTP server** (port = gRPC + 1)
-  - Ops endpoints: `/healthz`, `/ready`, `/raft/status`, `/raft/snapshot`, `/metrics`
-  - Embedded dashboard UI at `/dashboard/` plus REST endpoints under `/api/...`
+```bash
+# KV operations
+mimorictl put mykey myvalue
+mimorictl get mykey
+mimorictl get mykey --allow-stale  # read from followers
+mimorictl del mykey
 
-### Consistency model
+# Short aliases
+mimorictl p key value    # put
+mimorictl g key          # get
+mimorictl d key          # delete
 
-- **Writes (`Put`, `Delete`)**
+# Cluster operations
+mimorictl health         # or: mimorictl h
+mimorictl status         # or: mimorictl st
+mimorictl leader         # or: mimorictl ldr
+mimorictl metrics        # or: mimorictl m
 
-  - Must be handled by the Raft leader.
-  - Followers reject writes with a `leader=...` hint; the dashboard proxies writes to the leader.
+# Admin operations (requires leader)
+mimorictl add-node :4006          # or: mimorictl add :4006
+mimorictl remove-node :4006       # or: mimorictl rm :4006
+mimorictl transfer-leadership :4002  # or: mimorictl tl :4002
+mimorictl snapshot
+```
 
-- **Reads (`Get`)**
-  - Default is **leader reads** (strong / linearizable in the usual Raft sense).
-  - Optional **follower reads** are allowed only when:
-    - the client opts in (`--allow-stale` in CLI or `allow_stale=true` in the dashboard REST API), and
-    - the follower has a **valid read lease** (recent heartbeat).
+### Using the Go Client Library
 
-See `docs/FOLLOWER_READS.md` for the full explanation.
+Install the client library in your Go project:
 
-## Interfaces
+```bash
+go get github.com/jerkeyray/mimori
+```
 
-### Go Client Library
-
-For **embedding Mimori into your applications**, use the `client` package:
+**Simple Example:**
 
 ```go
-import "github.com/jerkeyray/mimori/client"
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/jerkeyray/mimori/client"
+)
 
 func main() {
-    // Create client with seed addresses (auto leader discovery + connection pooling)
+    // Create client with seed addresses
     c, err := client.New([]string{"localhost:4000", "localhost:4002", "localhost:4004"})
     if err != nil {
         log.Fatal(err)
@@ -211,272 +182,590 @@ func main() {
 
     ctx := context.Background()
 
-    // Put (always goes to leader)
-    err = c.Put(ctx, []byte("key"), []byte("value"))
+    // Put a key-value pair
+    if err := c.Put(ctx, []byte("hello"), []byte("world")); err != nil {
+        log.Fatal(err)
+    }
 
-    // Get (strong read from leader)
-    value, found, err := c.Get(ctx, []byte("key"))
+    // Get with strong consistency (reads from leader)
+    value, found, err := c.Get(ctx, []byte("hello"))
+    if err != nil {
+        log.Fatal(err)
+    }
+    if found {
+        fmt.Printf("Value: %s\n", value)
+    }
 
-    // Get with stale reads allowed (can read from followers)
-    value, found, err = c.GetWithOptions(ctx, []byte("key"), client.GetOptions{
-        AllowStale: true,
-    })
-
-    // Delete (always goes to leader)
-    err = c.Delete(ctx, []byte("key"))
-
-    // Health check
-    err = c.Health(ctx)
+    // Delete
+    if err := c.Delete(ctx, []byte("hello")); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
-**Features:**
+**Run the example:**
+
+```bash
+# With Docker Compose running
+cd examples/simple
+go run main.go
+```
+
+See [examples/simple/](examples/simple/) for a comprehensive example with stale reads, timeouts, and error handling.
+
+---
+
+## Architecture
+
+### High-Level Overview
+
+```text
+┌─────────────┐
+│   Clients   │
+│  CLI / UI   │
+│  Go Client  │
+└──────┬──────┘
+       │ gRPC (KV + Raft admin) / HTTP (REST API)
+       ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Node 1    │◄───►│   Node 2    │◄───►│   Node 3    │
+│  (Leader)   │     │  (Follower) │     │  (Follower) │
+│             │     │             │     │             │
+│ gRPC :4000  │     │ gRPC :4002  │     │ gRPC :4004  │
+│ HTTP :4001  │     │ HTTP :4003  │     │ HTTP :4005  │
+└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+       │                    │                    │
+       │  Raft Log          │  Raft Log          │  Raft Log
+       │  Replication       │  Replication       │  Replication
+       ▼                    ▼                    ▼
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│  Pebble KV  │       │  Pebble KV  │       │  Pebble KV  │
+│  (Storage)  │       │  (Storage)  │       │  (Storage)  │
+└─────────────┘       └─────────────┘       └─────────────┘
+```
+
+### Node Internals
+
+Each Mimori node consists of:
+
+1. **Raft Core** (`internal/raft/`)
+
+   - Leader election and heartbeats
+   - Log replication
+   - Snapshotting and compaction
+   - Dynamic membership (config changes)
+   - Leader transfer
+   - Read lease management for follower reads
+
+2. **State Machine** (`internal/storage/`)
+
+   - Pebble-backed KV store
+   - Apply loop processes committed log entries
+   - Atomic operations
+
+3. **gRPC Server** (`internal/api/`)
+
+   - KV service: `Put`, `Get`, `Delete`, `Health`
+   - Raft admin service: cluster membership, leader transfer
+
+4. **HTTP Server** (port = gRPC port + 1)
+   - Health/readiness: `/healthz`, `/ready`
+   - Raft status: `/raft/status`
+   - Metrics: `/metrics` (Prometheus format)
+   - REST API: `/api/kv/*`, `/api/cluster/*`
+   - Web dashboard: `/` (redirects to `/dashboard/`)
+
+### Consistency Model
+
+**Writes** (`Put`, `Delete`):
+
+- Must go through the Raft leader
+- Linearizable (strong consistency)
+- Followers return `leader=<addr>` hint for clients to follow
+
+**Reads** (`Get`):
+
+- **Default**: Leader reads (linearizable)
+- **Optional**: Follower reads with `--allow-stale` or `AllowStale: true`
+  - Requires valid read lease (follower received heartbeat recently)
+  - Bounded staleness (~300ms max)
+  - Higher throughput, lower latency
+
+See [docs/FOLLOWER_READS.md](docs/FOLLOWER_READS.md) for detailed explanation.
+
+---
+
+## Interfaces
+
+### Go Client Library
+
+**Package:** `github.com/jerkeyray/mimori/client`
+
+Feature-complete client with:
 
 - Automatic leader discovery and caching
 - Connection pooling and reuse
 - Automatic retries with exponential backoff
 - Context support for timeouts/cancellation
-- Thread-safe (safe for concurrent use)
+- Thread-safe (safe for concurrent goroutines)
 
-**Custom configuration:**
+**Installation:**
+
+```bash
+go get github.com/jerkeyray/mimori
+```
+
+**API:**
+
+```go
+// Create client
+c, err := client.New([]string{"host1:4000", "host2:4000"})
+defer c.Close()
+
+// Put (always goes to leader)
+err = c.Put(ctx, []byte("key"), []byte("value"))
+
+// Get (strong read from leader)
+value, found, err := c.Get(ctx, []byte("key"))
+
+// Get with stale reads (from followers)
+value, found, err = c.GetWithOptions(ctx, []byte("key"), client.GetOptions{
+    AllowStale: true,
+})
+
+// Delete
+err = c.Delete(ctx, []byte("key"))
+
+// Health check
+err = c.Health(ctx)
+```
+
+**Custom Configuration:**
 
 ```go
 cfg := client.Config{
     Seeds:       []string{"localhost:4000"},
-    ConnTimeout: 5 * time.Second,
-    ReqTimeout:  10 * time.Second,
-    MaxRetries:  5,
+    ConnTimeout: 5 * time.Second,   // Connection timeout
+    ReqTimeout:  10 * time.Second,  // Request timeout
+    MaxRetries:  5,                 // Retry attempts
 }
 c, err := client.NewWithConfig(cfg)
 ```
 
-See `client/` package documentation for full API reference.
+**Documentation:**
 
-### CLI (`mimorictl`)
+- Package docs: [client/](client/)
+- Examples: [examples/simple/](examples/simple/)
+- API reference: [client/README.md](client/README.md)
 
-For **manual operations** and **scripts**, use the CLI:
+### CLI Tool (mimorictl)
 
-Commands:
+Command-line interface for manual operations and scripting.
+
+**Features:**
+
+- Automatic leader discovery via seed addresses
+- Connection pooling and retry logic
+- Short command aliases
+- Environment variable support
+
+**Commands:**
+
+| Command                    | Alias  | Description             |
+| -------------------------- | ------ | ----------------------- |
+| `put <key> <value>`        | `p`    | Store key-value pair    |
+| `get <key>`                | `g`    | Retrieve value          |
+| `get <key> --allow-stale`  |        | Read from followers     |
+| `del <key>`                | `d`    | Delete key              |
+| `health`                   | `h`    | Health check            |
+| `status`                   | `st`   | Cluster status          |
+| `leader`                   | `ldr`  | Show current leader     |
+| `metrics`                  | `m`    | Prometheus metrics      |
+| `snapshot`                 | `snap` | Force snapshot (leader) |
+| `add-node <id>`            | `add`  | Add cluster member      |
+| `remove-node <id>`         | `rm`   | Remove cluster member   |
+| `transfer-leadership <id>` | `tl`   | Transfer leadership     |
+
+**Environment Variables:**
+
+- `MIMORI_ADDRS` or `MIMORI_SEEDS`: Comma-separated seed addresses (e.g., `127.0.0.1:4000,127.0.0.1:4002`)
+
+### Web Dashboard
+
+Each node serves an embedded web UI at `http://<node-http-port>/`
+
+**Features:**
+
+- Real-time cluster status
+- KV browser and editor
+- Leader/follower indication
+- Node health monitoring
+- Cluster membership management
+- Leader transfer UI
+
+**Access:**
+
+- Node 1: `http://localhost:4001`
+- Node 2: `http://localhost:4003`
+- Node 3: `http://localhost:4005`
+
+### HTTP/REST API
+
+Full REST API available on each node's HTTP port.
+
+#### Ops Endpoints
+
+- `GET /healthz` - Health check
+- `GET /ready` - Readiness check
+- `GET /raft/status` - Raft state (JSON)
+- `POST /raft/snapshot` - Force snapshot (leader only)
+- `GET /metrics` - Prometheus metrics
+
+#### KV Endpoints
+
+- `GET /api/kv/{key}` - Get value
+- `GET /api/kv/{key}?allow_stale=true` - Stale read
+- `PUT /api/kv/{key}` - Put value (body: `{"value": "..."}`)
+- `DELETE /api/kv/{key}` - Delete key
+
+#### Cluster Endpoints
+
+- `GET /api/cluster/nodes` - List cluster members
+- `GET /api/cluster/status` - Cluster status
+- `POST /api/cluster/add-node` - Add node
+- `POST /api/cluster/remove-node` - Remove node
+- `POST /api/cluster/transfer-leadership` - Transfer leadership
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- Go 1.23 or later
+- Docker (optional, for Docker Compose setup)
+- Make (optional, for convenience)
+
+### Clone and Build
 
 ```bash
-# KV operations
-mimorictl put <key> <value>
-mimorictl get <key>
-mimorictl get <key> --allow-stale
-mimorictl del <key>
+# Clone repository
+git clone https://github.com/jerkeyray/mimori.git
+cd mimori
 
-# Short aliases
-mimorictl p <key> <value>    # put
-mimorictl g <key>             # get
-mimorictl d <key>             # del
+# Build binaries
+make build
 
-# Ops / admin
-mimorictl health             # or: mimorictl h
-mimorictl status             # or: mimorictl st
-mimorictl leader             # or: mimorictl ldr
-mimorictl metrics            # or: mimorictl m
-mimorictl snapshot
+# Or build manually
+go build -o bin/mimorid ./cmd/mimorid
+go build -o bin/mimorictl ./cmd/mimorictl
 
-# Cluster management (leader operations)
-mimorictl add-node <node-id>           # or: mimorictl add <node-id>
-mimorictl remove-node <node-id>        # or: mimorictl rm <node-id>
-mimorictl transfer-leadership <node-id> # or: mimorictl tl <node-id>
-
-# Seed nodes (comma-separated)
-mimorictl --addr 127.0.0.1:4002,127.0.0.1:4000 status
+# Install to $GOPATH/bin
+make install
 ```
 
-### HTTP endpoints (per node)
-
-Each node exposes HTTP on `gRPC_PORT + 1`:
-
-- **Health**: `GET /healthz`
-- **Readiness**: `GET /ready`
-- **Raft status**: `GET /raft/status`
-- **Force snapshot**: `POST /raft/snapshot` (leader only)
-- **Prometheus**: `GET /metrics`
-- **Dashboard**: `GET /` (redirects to `/dashboard/`)
-
-### Dashboard REST API
-
-These endpoints are used by the dashboard UI (all on the node’s HTTP port):
-
-- **KV**:
-  - `GET /api/kv/{key}`
-  - `GET /api/kv/{key}?allow_stale=true`
-  - `PUT /api/kv/{key}` with JSON `{ "value": "..." }`
-  - `DELETE /api/kv/{key}`
-- **Cluster**:
-  - `GET /api/cluster/nodes`
-  - `GET /api/cluster/status`
-  - `POST /api/cluster/add-node`
-  - `POST /api/cluster/remove-node`
-  - `POST /api/cluster/transfer-leadership`
-  - `POST /api/cluster/spawn-node` (best-effort local spawning; mainly for local/dev)
-- **Dashboard status**:
-  - `GET /api/status`
-
-## Running `mimorid` manually
-
-`mimorid` is configured via environment variables:
-
-- **`MIMORI_ADDR`**: gRPC listen address (default `:4000`)
-- **`MIMORI_DATA`**: data directory (default `data`)
-- **`MIMORI_PEERS`**: comma-separated peer IDs/addresses (default empty)
-- **`MIMORI_NODE_ID`**: Raft node ID (defaults to `MIMORI_ADDR`)
-- **`MIMORI_LOG_FORMAT`**: `json` or `console` (default `console` outside Dockerfile)
-- **`MIMORI_LOG_LEVEL`**: `debug|info|warn|error` (default `info`)
-
-Example (single node):
+### Make Targets
 
 ```bash
-MIMORI_ADDR=:4000 MIMORI_NODE_ID=:4000 MIMORI_PEERS="" MIMORI_DATA=./data1 ./bin/mimorid
+make build          # Build binaries to ./bin/
+make install        # Install to $GOPATH/bin
+make clean          # Remove build artifacts
+make test           # Run all tests
+make test-e2e       # Run integration tests
+make test-chaos     # Run chaos tests
+make test-load      # Run load tests
+make fmt            # Format code
+make vet            # Run go vet
+make lint           # Format + vet
+make docker-build   # Build Docker image
+make docker-up      # Start cluster
+make docker-down    # Stop cluster
+make docker-logs    # View logs
+make help           # Show all targets
 ```
 
-Note: the HTTP server automatically binds on `:4001` when gRPC is `:4000`.
+---
 
-## Using the Client Library in Your Application
+## Running Manually
 
-The `client` package makes it simple to use Mimori as a distributed KV store in your Go applications.
+### Single Node (Development)
 
-### Example: Web session store
+```bash
+# Start a single node
+bash scripts/dashboard-start.sh
 
-```go
-package main
-
-import (
-    "context"
-    "encoding/json"
-    "log"
-    "net/http"
-    "time"
-
-    "github.com/jerkeyray/mimori/client"
-)
-
-type Session struct {
-    UserID    string    `json:"user_id"`
-    ExpiresAt time.Time `json:"expires_at"`
-}
-
-var mimoriClient *client.Client
-
-func main() {
-    // Initialize Mimori client
-    c, err := client.New([]string{"localhost:4000", "localhost:4002", "localhost:4004"})
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer c.Close()
-    mimoriClient = c
-
-    http.HandleFunc("/session", sessionHandler)
-    log.Fatal(http.ListenAndServe(":8080", nil))
-}
-
-func sessionHandler(w http.ResponseWriter, r *http.Request) {
-    sessionID := r.URL.Query().Get("id")
-    if sessionID == "" {
-        http.Error(w, "missing session id", 400)
-        return
-    }
-
-    ctx := r.Context()
-    key := []byte("session:" + sessionID)
-
-    switch r.Method {
-    case "GET":
-        // Read from followers OK for sessions (slight staleness acceptable)
-        data, found, err := mimoriClient.GetWithOptions(ctx, key, client.GetOptions{
-            AllowStale: true,
-        })
-        if err != nil {
-            http.Error(w, err.Error(), 500)
-            return
-        }
-        if !found {
-            http.Error(w, "session not found", 404)
-            return
-        }
-        w.Header().Set("Content-Type", "application/json")
-        w.Write(data)
-
-    case "POST":
-        var sess Session
-        if err := json.NewDecoder(r.Body).Decode(&sess); err != nil {
-            http.Error(w, "invalid json", 400)
-            return
-        }
-        data, _ := json.Marshal(sess)
-        if err := mimoriClient.Put(ctx, key, data); err != nil {
-            http.Error(w, err.Error(), 500)
-            return
-        }
-        w.WriteHeader(201)
-    }
-}
+# Dashboard will be at http://localhost:4001
 ```
 
-### Example: Distributed config
+Stop with:
 
-```go
-type ConfigStore struct {
-    client *client.Client
-}
-
-func (cs *ConfigStore) GetFeatureFlag(ctx context.Context, flag string) (bool, error) {
-    key := []byte("feature:" + flag)
-
-    // Stale reads OK for feature flags
-    data, found, err := cs.client.GetWithOptions(ctx, key, client.GetOptions{
-        AllowStale: true,
-    })
-    if err != nil {
-        return false, err
-    }
-    if !found {
-        return false, nil
-    }
-    return string(data) == "true", nil
-}
-
-func (cs *ConfigStore) SetFeatureFlag(ctx context.Context, flag string, enabled bool) error {
-    key := []byte("feature:" + flag)
-    val := []byte("false")
-    if enabled {
-        val = []byte("true")
-    }
-    return cs.client.Put(ctx, key, val)
-}
+```bash
+bash scripts/dashboard-stop.sh
 ```
+
+### Multi-Node Cluster (Manual)
+
+**Node 1 (Initial Leader):**
+
+```bash
+MIMORI_ADDR=:4000 \
+MIMORI_NODE_ID=:4000 \
+MIMORI_PEERS="" \
+MIMORI_DATA=./data1 \
+./bin/mimorid
+```
+
+**Node 2:**
+
+```bash
+MIMORI_ADDR=:4002 \
+MIMORI_NODE_ID=:4002 \
+MIMORI_PEERS=":4000" \
+MIMORI_DATA=./data2 \
+./bin/mimorid
+```
+
+**Node 3:**
+
+```bash
+MIMORI_ADDR=:4004 \
+MIMORI_NODE_ID=:4004 \
+MIMORI_PEERS=":4000" \
+MIMORI_DATA=./data3 \
+./bin/mimorid
+```
+
+Note: HTTP server automatically binds to gRPC port + 1 (e.g., `:4001` for gRPC `:4000`)
+
+---
+
+## Configuration
+
+### Server Environment Variables
+
+| Variable            | Default       | Description                                 |
+| ------------------- | ------------- | ------------------------------------------- |
+| `MIMORI_ADDR`       | `:4000`       | gRPC listen address                         |
+| `MIMORI_HTTP_ADDR`  | (gRPC+1)      | HTTP listen address                         |
+| `MIMORI_DATA`       | `data`        | Data directory for Pebble storage           |
+| `MIMORI_PEERS`      | `""`          | Comma-separated initial peers               |
+| `MIMORI_NODE_ID`    | (MIMORI_ADDR) | Raft node ID                                |
+| `MIMORI_LOG_FORMAT` | `console`     | Log format: `json` or `console`             |
+| `MIMORI_LOG_LEVEL`  | `info`        | Log level: `debug`, `info`, `warn`, `error` |
+
+### Client Environment Variables
+
+| Variable       | Description                                   |
+| -------------- | --------------------------------------------- |
+| `MIMORI_ADDRS` | Comma-separated seed addresses for CLI/client |
+| `MIMORI_SEEDS` | Alias for `MIMORI_ADDRS`                      |
+
+---
 
 ## Observability
 
-- **Prometheus metrics**: scrape `/metrics` on each node’s HTTP port.
-- **Grafana**: see `docker/` + `docker-compose.yml` for provisioning.
+### Metrics
+
+Prometheus-compatible metrics available at `/metrics` on each node's HTTP port.
+
+**Key Metrics:**
+
+- `mimori_raft_state` - Current Raft state (leader/follower/candidate)
+- `mimori_raft_term` - Current Raft term
+- `mimori_raft_commit_index` - Last committed index
+- `mimori_kv_operations_total` - KV operation counters
+- `mimori_kv_operation_duration_seconds` - Operation latency
+
+### Monitoring Stack
+
+Docker Compose includes:
+
+- **Prometheus**: `http://localhost:9090`
+- **Grafana**: `http://localhost:3000` (admin/admin)
+
+Pre-configured dashboard shows:
+
+- Cluster topology
+- Request rates and latencies
+- Raft state transitions
+- Storage metrics
+
+See [docker/README.md](docker/README.md) for details.
+
+---
 
 ## Development
 
-### Tests
+### Running Tests
 
-See `docs/TESTING.md`.
+```bash
+# All tests
+make test
 
-### Repo layout
+# Specific test suites
+make test-e2e         # Integration tests
+make test-chaos       # Chaos/failure tests
+make test-load        # Load tests
+make test-stress      # Stress tests
+
+# With coverage
+go test -cover ./...
+
+# Verbose
+go test -v ./...
+```
+
+See [docs/TESTING.md](docs/TESTING.md) for comprehensive testing guide.
+
+### Repository Structure
 
 ```text
-cmd/                # binaries (mimorid, mimorictl)
-client/             # Go client library for embedding Mimori in applications
-examples/           # example applications using the client library
-internal/api/       # gRPC + HTTP layer (includes dashboard + REST API)
-internal/raft/      # Raft implementation
-internal/storage/   # Pebble wrapper
-internal/cluster/   # peer monitoring/heartbeats
-scripts/            # local helper scripts + smoke tests
-tests/              # integration tests
+mimori/
+├── cmd/                      # Binaries
+│   ├── mimorid/             # Server binary
+│   └── mimorictl/           # CLI binary
+├── client/                   # Go client library (public API)
+│   ├── client.go
+│   ├── client_test.go
+│   ├── example_test.go
+│   ├── doc.go
+│   └── README.md
+├── examples/                 # Example applications
+│   └── simple/              # Simple client example
+├── internal/                 # Private packages
+│   ├── api/                 # gRPC + HTTP servers
+│   │   ├── kv/             # KV service
+│   │   └── web/            # Dashboard + REST API
+│   ├── raft/                # Raft implementation
+│   ├── storage/             # Pebble wrapper
+│   ├── cluster/             # Peer management
+│   ├── logging/             # Structured logging
+│   └── utils/               # Utilities
+├── tests/                    # Integration tests
+│   ├── e2e_test.go
+│   ├── chaos_test.go
+│   └── load_test.go
+├── docs/                     # Documentation
+│   ├── FOLLOWER_READS.md
+│   └── TESTING.md
+├── docker/                   # Docker configs
+│   ├── prometheus.yml
+│   └── grafana/
+├── scripts/                  # Helper scripts
+│   ├── dashboard-start.sh
+│   └── tests/               # Shell test scripts
+├── proto/                    # Protobuf definitions
+│   ├── kv.proto
+│   └── raft.proto
+├── docker-compose.yml
+├── Dockerfile
+├── Makefile
+├── LICENSE
+└── README.md                 # This file
 ```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Make changes and add tests
+4. Format code: `make fmt`
+5. Run tests: `make test`
+6. Commit: `git commit -am 'Add my feature'`
+7. Push: `git push origin feature/my-feature`
+8. Open a Pull Request
+
+---
 
 ## Troubleshooting
 
-- **`not leader, leader=...`**: you hit a follower with a leader-only request. Use a seed list (`--addr a,b,c`) so the CLI can follow redirects.
-- **Follower reads rejected**: use `--allow-stale` (CLI) or `allow_stale=true` (dashboard API) and ensure the follower has a valid lease.
-- **Dashboard not loading**: open the node’s HTTP port and use `/` (redirects to `/dashboard/`).
+### Common Issues
+
+**"not leader, leader=..."**
+
+- You sent a write request to a follower
+- Solution: Use seed addresses (`--addr a,b,c` or `MIMORI_ADDRS`) so CLI can discover leader
+- The client library handles this automatically
+
+**"operation failed after 3 retries"**
+
+- Cluster might not be running
+- Solution: Start cluster with `docker-compose up -d`
+- Wait a few seconds for leader election
+
+**"follower reads rejected"**
+
+- Follower doesn't have a valid read lease
+- Solution: Ensure follower is receiving heartbeats
+- Check cluster health: `mimorictl status`
+
+**Dashboard not loading**
+
+- Check HTTP port (gRPC port + 1)
+- Node 1: `http://localhost:4001` (not 4000)
+- Try: `curl http://localhost:4001/healthz`
+
+**"could not discover leader from any seed"**
+
+- Cluster isn't running or seeds are wrong
+- Solution: Verify cluster with `docker-compose ps`
+- Check addresses in `MIMORI_ADDRS`
+
+### Debug Mode
+
+Enable debug logging:
+
+```bash
+MIMORI_LOG_LEVEL=debug ./bin/mimorid
+```
+
+Or in Docker Compose, edit `docker-compose.yml`:
+
+```yaml
+environment:
+  - MIMORI_LOG_LEVEL=debug
+```
+
+### Getting Help
+
+- Check [docs/](docs/) for detailed documentation
+- Review [examples/](examples/) for usage patterns
+- Open an issue: https://github.com/jerkeyray/mimori/issues
+
+---
+
+## Documentation
+
+### Core Docs
+
+- [Follower Reads Explanation](docs/FOLLOWER_READS.md)
+- [Testing Guide](docs/TESTING.md)
+- [Docker Setup](docker/README.md)
+
+### API Documentation
+
+- [Client Library API](client/README.md)
+- [Client Examples](examples/simple/)
+
+### Additional Resources
+
+- Raft Paper: https://raft.github.io/raft.pdf
+- Pebble Storage: https://github.com/cockroachdb/pebble
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+---
+
+## Acknowledgments
+
+- Raft consensus algorithm by Diego Ongaro and John Ousterhout
+- Built with [Pebble](https://github.com/cockroachdb/pebble) storage engine
+- Inspired by [etcd](https://etcd.io/) and [Consul](https://www.consul.io/)
+
+---
+
+**Mimori** - Reliable distributed storage, simple to use.

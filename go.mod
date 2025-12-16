@@ -1,6 +1,8 @@
 module github.com/jerkeyray/mimori
 
-go 1.23
+go 1.23.0
+
+toolchain go1.24.1
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
