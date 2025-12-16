@@ -1,10 +1,7 @@
 # Pebble data directories
 data/
-data1/
-data2/
-data3/
-data-dashboard/
-data-spawn/
+data*/
+data-*/
 test-data-*/
 test-data-node*/
 test-data-transfer-*/
@@ -28,3 +25,6 @@ mimorictl
 
 # Docker volumes (data directories)
 docker-volumes/
+
+# Development notes (keep local only)
+notes/

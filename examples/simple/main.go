@@ -88,15 +88,25 @@ func main() {
 		fmt.Println("    Verified: user:bob no longer exists")
 	}
 
-	// 7. Timeout example
+	// 7. Timeout example (demonstrating timeout handling)
 	fmt.Println("\n[6] Using context timeout...")
 	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
 	if err := c.Put(timeoutCtx, []byte("fast"), []byte("data")); err != nil {
-		fmt.Printf("    Put with short timeout: %v\n", err)
+		fmt.Printf("    ✓ Timeout respected (100ms too short): %v\n", err)
 	} else {
-		fmt.Println("    Put succeeded within timeout")
+		fmt.Println("    ✓ Put succeeded within timeout")
+	}
+
+	// Now with a reasonable timeout
+	reasonableCtx, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel2()
+
+	if err := c.Put(reasonableCtx, []byte("fast"), []byte("data")); err != nil {
+		fmt.Printf("    ✗ Put failed: %v\n", err)
+	} else {
+		fmt.Println("    ✓ Put succeeded with 5s timeout")
 	}
 
 	fmt.Println("\nDone!")

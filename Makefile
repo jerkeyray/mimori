@@ -1,4 +1,4 @@
-.PHONY: build install clean test help
+.PHONY: build install clean test lint fmt vet proto docker-build docker-up docker-down help
 
 # Build both binaries
 build:
@@ -53,15 +53,73 @@ test-stress:
 test-follower-reads:
 	go test ./tests -v -run TestFollowerReads
 
+# Code quality
+fmt:
+	@echo "Formatting code..."
+	go fmt ./...
+	gofmt -s -w .
+
+vet:
+	@echo "Running go vet..."
+	go vet ./...
+
+lint: fmt vet
+	@echo "Linting complete!"
+
+# Docker targets
+docker-build:
+	@echo "Building Docker image..."
+	docker-compose build
+
+docker-up:
+	@echo "Starting cluster..."
+	docker-compose up -d
+	@echo "Cluster started! Wait a few seconds for leader election."
+
+docker-down:
+	@echo "Stopping cluster..."
+	docker-compose down
+
+docker-logs:
+	docker-compose logs -f
+
+# Proto generation (if needed)
+proto:
+	@echo "Regenerating proto files..."
+	@echo "Note: protoc must be installed"
+	protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		proto/*.proto
+
 # Help
 help:
-	@echo "Available targets:"
+	@echo "Mimori Build System"
+	@echo ""
+	@echo "Build:"
 	@echo "  make build          - Build binaries to ./bin/"
 	@echo "  make install        - Install binaries to GOPATH/bin"
 	@echo "  make clean          - Remove build artifacts"
+	@echo ""
+	@echo "Testing:"
 	@echo "  make test           - Run all tests"
 	@echo "  make test-e2e       - Run e2e tests"
-	@echo "  make test-follower-reads - Run follower reads test"
+	@echo "  make test-chaos     - Run chaos tests"
+	@echo "  make test-load      - Run load tests"
+	@echo "  make test-stress    - Run stress tests"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make fmt            - Format code"
+	@echo "  make vet            - Run go vet"
+	@echo "  make lint           - Format and vet"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-build   - Build Docker image"
+	@echo "  make docker-up      - Start cluster"
+	@echo "  make docker-down    - Stop cluster"
+	@echo "  make docker-logs    - View cluster logs"
+	@echo ""
+	@echo "Development:"
+	@echo "  make proto          - Regenerate proto files"
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  ./bin/mimorictl get key"
