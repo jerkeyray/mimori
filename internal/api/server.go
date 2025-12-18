@@ -380,6 +380,14 @@ func newSpawnManager() *spawnManager {
 	}
 }
 
+func (m *spawnManager) ensureNextAtLeast(p int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p > m.next {
+		m.next = p
+	}
+}
+
 func (m *spawnManager) nextFreePort(reserved []int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1027,6 +1035,11 @@ func handleSpawnNode(w http.ResponseWriter, r *http.Request, raftNode *raft.Raft
 
 	// Build reserved port list (self + peers + already spawned)
 	_, selfPort := utils.ParseHostPort(grpcAddr)
+	// Default port allocation should be relative to the leader's gRPC port (selfPort+2),
+	// so local clusters started on non-4000 ports still spawn nodes in the same range.
+	if selfPort > 0 {
+		spawner.ensureNextAtLeast(selfPort + 2)
+	}
 	peers := raftNode.GetPeers()
 	reserved := []int{selfPort}
 	for _, p := range peers {

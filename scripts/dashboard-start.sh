@@ -11,6 +11,12 @@ echo "Mimori Dashboard"
 echo "================"
 echo ""
 
+BASE_PORT="${MIMORI_BASE_PORT:-4000}"
+HTTP_PORT="$((BASE_PORT + 1))"
+DATA_DIR="./data-dashboard-${BASE_PORT}"
+LOG_FILE="/tmp/mimorid-dashboard-${BASE_PORT}.log"
+PID_FILE="/tmp/mimorid-dashboard-${BASE_PORT}.pid"
+
 echo "[1/4] Building mimorid..."
 go build -o bin/mimorid ./cmd/mimorid
 echo "  [OK] Build complete"
@@ -23,19 +29,27 @@ echo "  [OK] Cleanup complete"
 echo ""
 
 echo "[3/4] Cleaning old data..."
-rm -rf ./data-dashboard ./data-spawn >/dev/null 2>&1 || true
+rm -rf "${DATA_DIR}" ./data-spawn >/dev/null 2>&1 || true
 echo "  [OK] Data cleaned"
 echo ""
 
 echo "[4/4] Starting Mimori node..."
-MIMORI_ADDR=:4000 MIMORI_NODE_ID=:4000 MIMORI_PEERS="" MIMORI_DATA=./data-dashboard \
-  ./bin/mimorid > /tmp/mimorid-dashboard.log 2>&1 &
+if lsof -ti:"${BASE_PORT}" >/dev/null 2>&1 || lsof -ti:"${HTTP_PORT}" >/dev/null 2>&1; then
+  echo "  [FAIL] Port ${BASE_PORT}/${HTTP_PORT} already in use."
+  echo "         If Docker Compose is running, stop it with: docker-compose down"
+  echo "         Or run on a different port: MIMORI_BASE_PORT=4100 bash scripts/dashboard-start.sh"
+  exit 1
+fi
+
+MIMORI_ADDR=":${BASE_PORT}" MIMORI_NODE_ID="localhost:${BASE_PORT}" MIMORI_PEERS="" MIMORI_DATA="${DATA_DIR}" \
+  ./bin/mimorid > "${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
+echo "${SERVER_PID}" > "${PID_FILE}"
 echo "  [OK] Server started (PID: $SERVER_PID)"
 
 echo "Waiting for HTTP to be ready..."
 for i in {1..20}; do
-  if curl -s http://localhost:4001/healthz > /dev/null 2>&1; then
+  if curl -s "http://localhost:${HTTP_PORT}/healthz" > /dev/null 2>&1; then
     echo "  [OK] Server is ready!"
     break
   fi
@@ -48,16 +62,16 @@ for i in {1..20}; do
 done
 echo ""
 
-echo "Dashboard: http://localhost:4001/dashboard/"
-echo "Logs:      /tmp/mimorid-dashboard.log"
+echo "Dashboard: http://localhost:${HTTP_PORT}/dashboard/"
+echo "Logs:      ${LOG_FILE}"
 echo ""
 echo "Stop: bash scripts/dashboard-stop.sh"
 echo ""
 
 if command -v open > /dev/null; then
-  open http://localhost:4001/dashboard/ 2>/dev/null || true
+  open "http://localhost:${HTTP_PORT}/dashboard/" 2>/dev/null || true
 elif command -v xdg-open > /dev/null; then
-  xdg-open http://localhost:4001/dashboard/ 2>/dev/null || true
+  xdg-open "http://localhost:${HTTP_PORT}/dashboard/" 2>/dev/null || true
 fi
 
 trap "echo ''; echo 'Stopping server...'; kill $SERVER_PID 2>/dev/null || true; echo 'Server stopped.'; exit 0" INT TERM

@@ -59,9 +59,16 @@ Mimori is a distributed key-value store built in Go implementing the Raft consen
 
 ## Quick Start
 
-Get Mimori up and running in 2 minutes with a full 3-node cluster, CLI tool, and web dashboard.
+Get Mimori up and running quickly. Start by cloning the repo, then choose either the quick single-node demo or the full Docker Compose stack.
 
-### Quick Web Dashboard (Single Node, No Docker)
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/jerkeyray/mimori.git
+cd mimori
+```
+
+### Option A: Quick Web Dashboard (Single Node, No Docker)
 
 If you just want to try the web UI and a single-node Mimori instance:
 
@@ -85,16 +92,9 @@ When you're done, stop it with:
 bash scripts/dashboard-stop.sh
 ```
 
-For a full 3-node cluster with metrics and monitoring, follow the Docker-based steps below.
+### Option B: Full Stack (3-node Cluster + Prometheus + Grafana)
 
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/jerkeyray/mimori.git
-cd mimori
-```
-
-### Step 2: Start the Cluster
+#### Step 2: Start the Cluster
 
 Start a 3-node cluster with Prometheus and Grafana monitoring:
 
@@ -108,7 +108,7 @@ Wait a few seconds for the cluster to initialize. Check that all services are ru
 docker-compose ps
 ```
 
-### Step 3: Install the CLI Tool
+#### Step 3: Install the CLI Tool
 
 ```bash
 make install
@@ -126,7 +126,7 @@ Verify installation:
 mimorictl --help
 ```
 
-### Step 4: Use the CLI
+#### Step 4: Use the CLI
 
 Now you can interact with your cluster:
 
@@ -784,19 +784,6 @@ mimori/
 └── README.md                 # This file
 ```
 
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make changes and add tests
-4. Format code: `make fmt`
-5. Run tests: `make test`
-6. Commit: `git commit -am 'Add my feature'`
-7. Push: `git push origin feature/my-feature`
-8. Open a Pull Request
-
----
-
 ## Troubleshooting
 
 ### Common Issues
@@ -830,27 +817,6 @@ mimori/
 - Cluster isn't running or seeds are wrong
 - Solution: Verify cluster with `docker-compose ps`
 - Check addresses in `MIMORI_ADDRS`
-
-### Debug Mode
-
-Enable debug logging:
-
-```bash
-MIMORI_LOG_LEVEL=debug ./bin/mimorid
-```
-
-Or in Docker Compose, edit `docker-compose.yml`:
-
-```yaml
-environment:
-  - MIMORI_LOG_LEVEL=debug
-```
-
-### Getting Help
-
-- Check [docs/](docs/) for detailed documentation
-- Review [examples/](examples/) for usage patterns
-- Open an issue: https://github.com/jerkeyray/mimori/issues
 
 ---
 
