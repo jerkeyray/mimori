@@ -61,6 +61,28 @@ Mimori is a distributed key-value store built in Go implementing the Raft consen
 
 Get Mimori up and running in 2 minutes with a full 3-node cluster, CLI tool, and web dashboard.
 
+### Quick Web Dashboard (Single Node, No Docker)
+
+If you just want to try the web UI and a single-node Mimori instance:
+
+```bash
+bash scripts/dashboard-start.sh
+```
+
+Then open the dashboard at:
+
+- http://localhost:4001
+
+From there, you can explore the cluster view, put/get/delete keys, and experiment with adding more nodes from the dashboard once you have additional `mimorid` processes running.
+
+When you're done, stop it with:
+
+```bash
+bash scripts/dashboard-stop.sh
+```
+
+For a full 3-node cluster with metrics and monitoring, follow the Docker-based steps below.
+
 ### Step 1: Clone the Repository
 
 ```bash
@@ -163,6 +185,10 @@ You can access any node's dashboard:
 - **Node 1**: http://localhost:4001
 - **Node 2**: http://localhost:4003
 - **Node 3**: http://localhost:4005
+
+#### Dashboard Preview
+
+![Mimori web dashboard showing cluster status and KV browser](docs/images/dashboard.png)
 
 ### Step 6: View Metrics (Optional)
 
