@@ -165,14 +165,56 @@ async function loadStatus() {
 
 function httpBaseForNodeID(nodeId) {
   if (!nodeId) return null;
-  // Node IDs in this repo are typically ":4000" or "localhost:4000".
-  // We compute HTTP port as grpcPort + 1.
-  const parts = String(nodeId).split(":");
+
+  const id = String(nodeId);
+
+  // Docker Compose mode:
+  // - Raft node IDs must be dialable inside the Docker network, so they look like "mimori-node2:4000".
+  // - From the browser on the host, those hostnames are NOT resolvable; we must map to published localhost ports:
+  //   node1 http=4001, node2 http=4003, node3 http=4005, ...
+  const m = id.match(/^mimori-node(\d+):(\d+)$/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    const internalPort = parseInt(m[2], 10);
+    if (Number.isFinite(n) && n > 0) {
+      // Only map the *compose-defined* nodes, which always use internal gRPC port 4000.
+      // Spawned extra processes inside a container won't have host ports published, so
+      // we can't navigate the browser to them anyway.
+      if (!Number.isFinite(internalPort) || internalPort !== 4000) return null;
+      const grpcHostPort = 4000 + 2 * (n - 1);
+      const httpHostPort = grpcHostPort + 1;
+      return `${window.location.protocol}//${window.location.hostname}:${httpHostPort}`;
+    }
+  }
+
+  // Local/manual mode:
+  // Node IDs are typically ":4000" or "localhost:4000". We compute HTTP port as grpcPort + 1.
+  const parts = id.split(":");
   const portStr = parts[parts.length - 1];
   const port = parseInt(portStr, 10);
   if (!Number.isFinite(port) || port <= 0) return null;
   const httpPort = port + 1;
   return `${window.location.protocol}//${window.location.hostname}:${httpPort}`;
+}
+
+function prettyNodeID(nodeId) {
+  if (!nodeId) return "";
+  const id = String(nodeId);
+  const m = id.match(/^mimori-node(\d+):(\d+)$/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    const internalPort = parseInt(m[2], 10);
+    if (Number.isFinite(n) && n > 0) {
+      // Only rewrite compose-defined nodes (internal port 4000). For other ports, keep
+      // the raw ID so it's clear it's an internal/unpublished address.
+      if (Number.isFinite(internalPort) && internalPort !== 4000) {
+        return id;
+      }
+      const grpcHostPort = 4000 + 2 * (n - 1);
+      return `localhost:${grpcHostPort}`;
+    }
+  }
+  return id;
 }
 
 function updateNodeSelector(status) {
@@ -207,7 +249,7 @@ function updateNodeSelector(status) {
     const opt = document.createElement("option");
     opt.value = base;
     // Keep labels simple: show only the node id (no localhost/host noise).
-    opt.textContent = id;
+    opt.textContent = prettyNodeID(id);
     sel.appendChild(opt);
   }
 
@@ -279,13 +321,13 @@ function updateUI(status) {
 
   // Force DOM update by setting innerHTML/textContent
   const leaderEl = document.getElementById("leader-id");
-  if (leaderEl) leaderEl.textContent = leaderId;
+  if (leaderEl) leaderEl.textContent = prettyNodeID(leaderId);
 
   const headerLeaderEl = document.getElementById("header-leader-id");
-  if (headerLeaderEl) headerLeaderEl.textContent = leaderId;
+  if (headerLeaderEl) headerLeaderEl.textContent = prettyNodeID(leaderId);
 
   const headerNodeEl = document.getElementById("header-node-id");
-  if (headerNodeEl) headerNodeEl.textContent = status.node_id || "-";
+  if (headerNodeEl) headerNodeEl.textContent = prettyNodeID(status.node_id || "-");
 
   const termEl = document.getElementById("current-term");
   if (termEl) termEl.textContent = String(term);
@@ -327,20 +369,37 @@ function setClusterActionsEnabled(status) {
 
   const hasLeader = Boolean(status && status.leader_id);
   const isLeader = Boolean(status && status.is_leader);
+  const dockerMode =
+    status && typeof status.node_id === "string"
+      ? status.node_id.startsWith("mimori-node")
+      : false;
 
   // With server-side proxying, cluster changes can be initiated from any node.
   // If there's no leader elected yet, disable.
   const disable = !hasLeader;
   const message = !hasLeader
     ? "No leader elected yet. Cluster changes are temporarily unavailable."
+    : dockerMode
+    ? "Docker mode: dashboard node spawning is disabled (ports are not published). Use docker-compose to add more nodes."
     : isLeader
     ? "This node is leader. You can add/remove followers (cannot remove last peer)."
-    : `This node is follower. Requests will be forwarded to leader ${status.leader_id}.`;
+    : `This node is follower. Requests will be forwarded to leader ${prettyNodeID(
+        status.leader_id
+      )}.`;
+
+  // Spawn-node only works in local/manual mode (needs published ports).
+  if (addBtn) {
+    addBtn.disabled = disable || dockerMode;
+    addBtn.classList.toggle("btn-disabled", disable || dockerMode);
+  }
 
   [addBtn, removeBtn, transferBtn].forEach((btn) => {
     if (btn) {
-      btn.disabled = disable;
-      btn.classList.toggle("btn-disabled", disable);
+      // addBtn handled above; the rest depend only on leader availability.
+      if (btn !== addBtn) {
+        btn.disabled = disable;
+        btn.classList.toggle("btn-disabled", disable);
+      }
     }
   });
 
@@ -360,7 +419,7 @@ async function updateNodesList(status) {
     nodesList.innerHTML = `
             <div class="node-item ${currentIsLeader ? "leader" : ""}">
                 <div class="node-info">
-                    <div class="node-id">${status.node_id} ${
+                    <div class="node-id">${prettyNodeID(status.node_id)} ${
       currentIsLeader ? '<span class="leader-star">★</span>' : ""
     }</div>
                     <div class="node-state">State: ${status.state}</div>
@@ -384,7 +443,7 @@ async function updateNodesList(status) {
         const isPeerLeader = status.leader_id === peerId;
         nodeEl.innerHTML = `
                     <div class="node-info">
-                        <div class="node-id">${peerId} ${
+                        <div class="node-id">${prettyNodeID(peerId)} ${
           isPeerLeader ? '<span class="leader-star">★</span>' : ""
         }</div>
                         <div class="node-state">State: unknown</div>
@@ -429,7 +488,7 @@ async function updateNodesList(status) {
           isSelf ? "self" : ""
         }">
                 <div class="node-info">
-                        <div class="node-id">${node.id} ${
+                        <div class="node-id">${prettyNodeID(node.id)} ${
           isNodeLeader ? '<span class="leader-star">★</span>' : ""
         } ${isSelf ? '<span class="self-tag">Current</span>' : ""}</div>
                         <div class="node-meta">

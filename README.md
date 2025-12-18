@@ -75,6 +75,10 @@ Then open the dashboard at:
 
 From there, you can explore the cluster view, put/get/delete keys, and experiment with adding more nodes from the dashboard once you have additional `mimorid` processes running.
 
+#### Dashboard Preview
+
+![Mimori web dashboard showing cluster status and KV browser](docs/images/dashboard.png)
+
 When you're done, stop it with:
 
 ```bash
@@ -186,16 +190,18 @@ You can access any node's dashboard:
 - **Node 2**: http://localhost:4003
 - **Node 3**: http://localhost:4005
 
-#### Dashboard Preview
-
-![Mimori web dashboard showing cluster status and KV browser](docs/images/dashboard.png)
-
 ### Step 6: View Metrics (Optional)
 
 Check out the monitoring stack:
 
 - **Prometheus**: http://localhost:9090
 - **Grafana**: http://localhost:3000 (login: admin/admin)
+
+#### Grafana Dashboard Preview
+
+![Grafana dashboard for Mimori showing Raft health and throughput](docs/images/grafana-dashboard-overview.png)
+
+In Grafana, open **Dashboards → Browse → "Mimori Raft Cluster"**.
 
 Grafana includes pre-configured dashboards showing:
 
@@ -673,13 +679,14 @@ Note: HTTP server automatically binds to gRPC port + 1 (e.g., `:4001` for gRPC `
 
 Prometheus-compatible metrics available at `/metrics` on each node's HTTP port.
 
-**Key Metrics:**
+**Key Metrics (as exposed by the server and used in Grafana):**
 
-- `mimori_raft_state` - Current Raft state (leader/follower/candidate)
-- `mimori_raft_term` - Current Raft term
-- `mimori_raft_commit_index` - Last committed index
-- `mimori_kv_operations_total` - KV operation counters
-- `mimori_kv_operation_duration_seconds` - Operation latency
+- `raft_node_is_leader` - Whether this node is the leader (1) or not (0)
+- `raft_term` - Current Raft term
+- `raft_commit_index` - Highest committed log index
+- `raft_proposals_total` - Total number of proposals (labeled by status)
+- `raft_replication_lag` - Replication lag per follower
+- `raft_rpc_errors_total` - Total RPC errors (labeled by rpc_type and error_type)
 
 ### Monitoring Stack
 
@@ -687,6 +694,14 @@ Docker Compose includes:
 
 - **Prometheus**: `http://localhost:9090`
 - **Grafana**: `http://localhost:3000` (admin/admin)
+
+#### Grafana Dashboard Preview
+
+![Grafana dashboard for Mimori showing Raft health and throughput](docs/images/grafana-dashboard-overview.png)
+
+![Grafana dashboard for Mimori showing Raft health and throughput](docs/images/grafana-dashboard-raft.png)
+
+In Grafana, open **Dashboards → Browse → "Mimori Raft Cluster"**.
 
 Pre-configured dashboard shows:
 

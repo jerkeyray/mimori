@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ import (
 
 //go:embed web/dashboard/*
 var dashboardFS embed.FS
+
+var dockerNodeIDRe = regexp.MustCompile(`^mimori-node(\d+):\d+$`)
 
 // RaftNode interface for mocking
 type RaftNode interface {
@@ -446,6 +449,74 @@ func leaderHTTPBase(leaderID raft.NodeID) string {
 	return fmt.Sprintf("http://%s:%d", host, port+1)
 }
 
+func publicHTTPBaseForNodeID(r *http.Request, nodeID raft.NodeID) string {
+	// For browser-facing redirects/links we must return an address the browser can resolve.
+	// In Docker Compose, node IDs look like "mimori-node2:4000" (dialable inside Docker),
+	// but the browser must use published localhost ports (4001/4003/4005...).
+	host, _, _ := net.SplitHostPort(r.Host)
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		host = "localhost"
+	}
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if xf := r.Header.Get("X-Forwarded-Proto"); xf != "" {
+		scheme = xf
+	}
+
+	id := string(nodeID)
+	if m := dockerNodeIDRe.FindStringSubmatch(id); len(m) == 2 {
+		n, _ := strconv.Atoi(m[1])
+		if n > 0 {
+			grpcHostPort := 4000 + 2*(n-1)
+			httpHostPort := grpcHostPort + 1
+			return fmt.Sprintf("%s://%s:%d", scheme, host, httpHostPort)
+		}
+	}
+
+	// Local/manual mode: compute http port as grpcPort + 1 using the browser host.
+	_, port := utils.ParseHostPort(id)
+	if port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port+1)
+}
+
+func normalizeNodeIDForHost(nodeID raft.NodeID, host string) raft.NodeID {
+	// If nodeID is missing a host (":4002"), fill it in ("localhost:4002") for consistency.
+	h, p := utils.ParseHostPort(string(nodeID))
+	if p == 0 {
+		return nodeID
+	}
+	if h != "" {
+		return nodeID
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return raft.NodeID(fmt.Sprintf("%s:%d", host, p))
+}
+
+func requestHost(r *http.Request) string {
+	if r == nil {
+		return "localhost"
+	}
+	h, _, err := net.SplitHostPort(r.Host)
+	if err == nil && h != "" {
+		return h
+	}
+	if r.Host != "" {
+		// If Host does not include a port, SplitHostPort fails; return it as-is.
+		return r.Host
+	}
+	return "localhost"
+}
+
 func proxyToLeader(w http.ResponseWriter, r *http.Request, raftNode *raft.Raft) {
 	leaderID := raftNode.LeaderID()
 	if leaderID == "" {
@@ -495,13 +566,13 @@ func proxyToLeader(w http.ResponseWriter, r *http.Request, raftNode *raft.Raft) 
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func writeLeaderJSONError(w http.ResponseWriter, code int, msg string, leaderID raft.NodeID) {
+func writeLeaderJSONError(w http.ResponseWriter, r *http.Request, code int, msg string, leaderID raft.NodeID) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"error":       msg,
 		"leader_id":   string(leaderID),
-		"leader_http": leaderHTTPBase(leaderID),
+		"leader_http": publicHTTPBaseForNodeID(r, leaderID),
 	})
 }
 
@@ -941,6 +1012,19 @@ func handleSpawnNode(w http.ResponseWriter, r *http.Request, raftNode *raft.Raft
 		return
 	}
 
+	// This endpoint spawns a new OS process and assumes the browser can reach it on host ports.
+	// In Docker Compose, extra processes started inside the container will NOT have ports published,
+	// so the dashboard can't navigate to them. Keep cluster growth in Docker explicit via compose.
+	if dockerNodeIDRe.MatchString(raftNode.Status().ID) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "spawn-node is disabled in Docker Compose (ports are not published). Add more nodes via docker-compose instead.",
+		})
+		return
+	}
+
 	// Build reserved port list (self + peers + already spawned)
 	_, selfPort := utils.ParseHostPort(grpcAddr)
 	peers := raftNode.GetPeers()
@@ -966,12 +1050,22 @@ func handleSpawnNode(w http.ResponseWriter, r *http.Request, raftNode *raft.Raft
 		return
 	}
 
-	nodeID := fmt.Sprintf(":%d", port)
+	// Choose a consistent node id:
+	// - Local/manual mode: use browser host (usually "localhost") so UI shows "localhost:4002".
+	// - Docker Compose mode: keep ids dialable inside the Docker network (e.g. "mimori-node1:4002").
+	hostForIDs := requestHost(r)
+	selfID := raftNode.Status().ID
+	if dockerNodeIDRe.MatchString(selfID) {
+		if h, _ := utils.ParseHostPort(selfID); h != "" {
+			hostForIDs = h
+		}
+	}
+	nodeID := fmt.Sprintf("%s:%d", hostForIDs, port)
 
 	// Build peers list: include leader and known peers
-	peerIDs := []string{fmt.Sprintf(":%d", selfPort)}
+	peerIDs := []string{string(normalizeNodeIDForHost(raft.NodeID(selfID), hostForIDs))}
 	for _, p := range peers {
-		peerIDs = append(peerIDs, string(p))
+		peerIDs = append(peerIDs, string(normalizeNodeIDForHost(p, hostForIDs)))
 	}
 	peersEnv := strings.Join(peerIDs, ",")
 
@@ -1007,6 +1101,7 @@ func handleSpawnNode(w http.ResponseWriter, r *http.Request, raftNode *raft.Raft
 		spawner.remove(port)
 		writeLeaderJSONError(
 			w,
+			r,
 			http.StatusInternalServerError,
 			fmt.Sprintf("add node failed: %v", err),
 			raftNode.LeaderID(),
