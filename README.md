@@ -102,6 +102,12 @@ Start a 3-node cluster with Prometheus and Grafana monitoring:
 docker-compose up -d
 ```
 
+Note: If Docker Compose fails with a "port already in use" error, stop any local `mimorid` processes (or any other service) using ports `4000-4005`, then try again. Quick reset:
+
+```bash
+bash scripts/reset-cluster.sh --docker
+```
+
 Wait a few seconds for the cluster to initialize. Check that all services are running:
 
 ```bash
