@@ -65,5 +65,11 @@ func (m *MetaStore) Save(term int, votedFor NodeID, peers []NodeID) error {
 		return err
 	}
 
-	return os.WriteFile(m.path, b, 0644)
+	// Write atomically: write to temp file, then rename
+	// This prevents corruption if process crashes mid-write
+	tmp := m.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, m.path)
 }

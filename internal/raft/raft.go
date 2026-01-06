@@ -792,6 +792,11 @@ func (r *Raft) applyConfigChangeLocked(isAdd bool, nodeID NodeID) {
 		r.peers = newPeers
 		delete(r.nextIndex, nodeID)
 		delete(r.matchIndex, nodeID)
+
+		// Clean up pipeline semaphore to prevent memory leak
+		r.pipeMu.Lock()
+		delete(r.pipelineSemaphores, nodeID)
+		r.pipeMu.Unlock()
 	}
 
 	// Persist updated configuration
@@ -1068,6 +1073,7 @@ func (r *Raft) runMetricsUpdater() {
 func (r *Raft) Stop() {
 	r.stopOnce.Do(func() {
 		close(r.shutdownCh)
+		close(r.applyCh) // Close apply channel to unblock consumers
 		// Close all pooled connections
 		if r.connPool != nil {
 			r.connPool.closeAll()

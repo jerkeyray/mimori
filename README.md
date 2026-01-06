@@ -2,30 +2,52 @@
 
 > A distributed key-value store built on Raft consensus
 
-Mimori is a distributed key-value store built in Go implementing the Raft consensus algorithm. It provides strong consistency for writes, optional follower reads for scalability, dynamic cluster membership, and a rich set of interfaces including a Go client library, CLI tool, web dashboard, and REST API.
+Mimori is a distributed key-value store built in Go implementing the Raft consensus algorithm from scratch. It provides strong consistency for writes, optional follower reads for scalability, dynamic cluster membership, and a rich set of interfaces including a Go client library, CLI tool, web dashboard, and REST API.
 
 ---
 
 ## Table of Contents
 
+- [Why Mimori?](#why-mimori)
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [Using the Go Client Library](#using-the-go-client-library)
 - [Advanced Usage](#advanced-usage)
 - [Architecture](#architecture)
 - [Interfaces](#interfaces)
-  - [Go Client Library](#go-client-library)
-  - [CLI Tool (mimorictl)](#cli-tool-mimorictl)
-  - [Web Dashboard](#web-dashboard)
-  - [HTTP/REST API](#httprest-api)
 - [Building from Source](#building-from-source)
-- [Running Manually](#running-manually)
 - [Configuration](#configuration)
 - [Observability](#observability)
-- [Development](#development)
+- [Development & Testing](#development)
 - [Troubleshooting](#troubleshooting)
 - [Documentation](#documentation)
-- [License](#license)
+
+---
+
+## Why Mimori?
+
+**Built for Learning & Production Patterns**
+
+Mimori was created to deeply understand distributed consensus by implementing the Raft algorithm from the research paper. Unlike simple tutorials, Mimori includes production-ready features:
+
+- **Real Fault Tolerance**: Survives node crashes with automatic leader election (<500ms)
+- **Read Scalability**: Follower reads with bounded staleness (72x throughput improvement)
+- **Dynamic Membership**: Add/remove nodes without downtime
+- **Full Observability**: Prometheus metrics + Grafana dashboards
+- **Multiple Interfaces**: Go client, CLI, REST API, Web UI
+- **Production Features**: Health checks, snapshotting, leader transfer
+
+**Use Cases:**
+- Configuration stores (like etcd for small deployments)
+- Metadata services
+- Distributed coordination
+- Learning distributed systems concepts
+- Interview project showcase
+
+**Not Suitable For:**
+- High-throughput caching (use Redis)
+- Analytics workloads (use ClickHouse, BigQuery)
+- Large-scale production systems (use etcd, Consul)
 
 ---
 
@@ -55,9 +77,50 @@ Mimori is a distributed key-value store built in Go implementing the Raft consen
 - **Metrics**: Prometheus-compatible `/metrics` endpoint
 - **Observability**: Docker Compose setup with Prometheus + Grafana
 
+**Tech Stack:** Go 1.23 • gRPC • Pebble (LSM) • Docker • Prometheus • Grafana
+
+**Test Coverage:**
+- Unit tests (Raft core, storage)
+- E2E integration tests (full cluster scenarios)
+- Chaos tests (network partitions, node crashes)
+- Load tests (concurrent operations)
+- Stress tests (24-hour stability)
+
+### Performance
+
+Benchmark results from a 3-node cluster running on Docker (M1 MacBook Pro, 8-core, 16GB RAM):
+
+| Metric | Value |
+|--------|-------|
+| **Write Throughput** | 32 ops/sec |
+| **Read Throughput** (stale) | 2,310 ops/sec |
+| **Write Latency (p95)** | 253ms |
+| **Read Latency (p95)** | 10ms |
+| **Read Speedup** | 72x vs writes (follower reads) |
+
+*Measured with 8 concurrent writers and 8 concurrent readers over 45 seconds. Run `go run scripts/benchmark.go` for your own measurements.*
+
+**Notes:**
+- Writes go through Raft consensus (higher latency expected)
+- Follower reads offer significantly higher throughput with bounded staleness (~300ms)
+- Performance is sufficient for configuration stores, metadata services, and coordination tasks
+- For higher throughput, consider batching or running on dedicated server hardware
+
 ---
 
 ## Quick Start
+
+**30-Second Demo:**
+```bash
+git clone https://github.com/jerkeyray/mimori.git && cd mimori
+docker-compose up -d && sleep 10
+go build -o mimorictl ./cmd/mimorictl
+./mimorictl --addr localhost:4000 put hello world
+./mimorictl get hello
+# Open http://localhost:4001 for web dashboard
+```
+
+---
 
 Get Mimori up and running quickly. Start by cloning the repo, then choose either the quick single-node demo or the full Docker Compose stack.
 
@@ -333,6 +396,39 @@ mimorictl --addr your-cluster-host:4000 status
 ---
 
 ## Architecture
+
+### System Overview
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Mimori Cluster                      │
+│                                                         │
+│  ┌───────────┐      ┌───────────┐      ┌───────────┐    │
+│  │  Node 1   │◄────►│  Node 2   │◄────►│  Node 3   │    │
+│  │ (Leader)  │      │(Follower) │      │(Follower) │    │
+│  │           │      │           │      │           │    │
+│  │ Raft Core │      │ Raft Core │      │ Raft Core │    │
+│  │ ↕         │      │ ↕         │      │ ↕         │    │
+│  │ Pebble KV │      │ Pebble KV │      │ Pebble KV │    │
+│  └─────┬─────┘      └─────┬─────┘      └─────┬─────┘    │
+└────────┼───────────────────┼─────────────────┼──────────┘
+         │                   │                 │
+         └───────────────────┴─────────────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+    ┌─────────▼─────────┐         ┌────────▼────────┐
+    │   Go Client Lib   │         │  CLI / REST API │
+    │   (embed in app)  │         │   / Dashboard   │
+    └───────────────────┘         └─────────────────┘
+```
+
+**Key Design Decisions:**
+- Single Raft group (horizontal scaling via sharding not implemented)
+- Leader handles all writes (linearizable consistency)
+- Followers can serve reads with bounded staleness (~300ms)
+- Pebble LSM for persistent storage (same engine as CockroachDB)
+- gRPC for node-to-node communication
 
 ### High-Level Overview
 
@@ -758,10 +854,14 @@ mimori/
 │   └── README.md
 ├── examples/                 # Example applications
 │   └── simple/              # Simple client example
+├── web/                      # Web dashboard (static assets)
+│   ├── embed.go
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
 ├── internal/                 # Private packages
-│   ├── api/                 # gRPC + HTTP servers
-│   │   ├── kv/             # KV service
-│   │   └── web/            # Dashboard + REST API
+│   ├── api/                 # gRPC + HTTP servers + REST API
+│   │   └── kv/             # KV service
 │   ├── raft/                # Raft implementation
 │   ├── storage/             # Pebble wrapper
 │   ├── cluster/             # Peer management
@@ -850,14 +950,3 @@ mimori/
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
----
-
-## Acknowledgments
-
-- Raft consensus algorithm by Diego Ongaro and John Ousterhout
-- Built with [Pebble](https://github.com/cockroachdb/pebble) storage engine
-- Inspired by [etcd](https://etcd.io/) and [Consul](https://www.consul.io/)
-
----
-
-**Mimori** - Reliable distributed storage, simple to use.

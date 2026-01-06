@@ -74,5 +74,11 @@ func (ls *LogStore) SaveAll(entries []LogEntry) error {
 		return err
 	}
 
-	return os.WriteFile(ls.path, b, 0644)
+	// Write atomically: write to temp file, then rename
+	// This prevents corruption if process crashes mid-write
+	tmp := ls.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, ls.path)
 }

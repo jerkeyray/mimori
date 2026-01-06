@@ -178,6 +178,18 @@ func (r *Raft) sendAppendEntriesBatch(
 	}
 
 	// Successful replication
+	// Check if peer still exists (may have been removed while RPC was in-flight)
+	peerExists := false
+	for _, p := range r.peers {
+		if p == peer {
+			peerExists = true
+			break
+		}
+	}
+	if !peerExists {
+		return false
+	}
+
 	if len(entries) > 0 {
 		lastSent := int(entries[len(entries)-1].Index)
 		r.matchIndex[peer] = lastSent

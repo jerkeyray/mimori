@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,14 +25,12 @@ import (
 	"github.com/jerkeyray/mimori/internal/raft/raftpb"
 	"github.com/jerkeyray/mimori/internal/storage"
 	"github.com/jerkeyray/mimori/internal/utils"
+	"github.com/jerkeyray/mimori/web"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-//go:embed web/dashboard/*
-var dashboardFS embed.FS
 
 var dockerNodeIDRe = regexp.MustCompile(`^mimori-node(\d+):\d+$`)
 
@@ -177,12 +174,15 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 			// Even if not leader, node is healthy
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			if err := json.NewEncoder(w).Encode(map[string]interface{}{
 				"status":     "ok",
 				"node_id":    st.ID,
 				"raft_state": st.State,
 				"term":       st.Term,
-			})
+			}); err != nil {
+				logger := logging.With().Err(err).Str("component", "api").Logger()
+				logger.Error().Msg("failed to encode health response")
+			}
 		})
 
 		// readiness check - node is ready to serve requests
@@ -206,21 +206,27 @@ func ListenAndServe(addr string, store storage.KV, raftNode *raft.Raft) error {
 			if ready {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				if err := json.NewEncoder(w).Encode(map[string]interface{}{
 					"ready":      true,
 					"node_id":    st.ID,
 					"raft_state": st.State,
 					"leader_id":  st.LeaderID,
-				})
+				}); err != nil {
+					logger := logging.With().Err(err).Str("component", "api").Logger()
+					logger.Error().Msg("failed to encode ready response")
+				}
 			} else {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				if err := json.NewEncoder(w).Encode(map[string]interface{}{
 					"ready":      false,
 					"reason":     reason,
 					"node_id":    st.ID,
 					"raft_state": st.State,
-				})
+				}); err != nil {
+					logger := logging.With().Err(err).Str("component", "api").Logger()
+					logger.Error().Msg("failed to encode ready response")
+				}
 			}
 		})
 
@@ -606,10 +612,13 @@ func (h *restAPIHandler) handleGet(w http.ResponseWriter, r *http.Request, key [
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"found": resp.Found,
 		"value": string(resp.Value),
-	})
+	}); err != nil {
+		logger := logging.With().Err(err).Str("component", "api").Logger()
+		logger.Error().Msg("failed to encode get response")
+	}
 }
 
 func (h *restAPIHandler) handlePut(w http.ResponseWriter, r *http.Request, key []byte) {
@@ -638,9 +647,12 @@ func (h *restAPIHandler) handlePut(w http.ResponseWriter, r *http.Request, key [
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok": true,
-	})
+	}); err != nil {
+		logger := logging.With().Err(err).Str("component", "api").Logger()
+		logger.Error().Msg("failed to encode put response")
+	}
 }
 
 func (h *restAPIHandler) handleDelete(w http.ResponseWriter, r *http.Request, key []byte) {
@@ -658,9 +670,12 @@ func (h *restAPIHandler) handleDelete(w http.ResponseWriter, r *http.Request, ke
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"deleted": true,
-	})
+	}); err != nil {
+		logger := logging.With().Err(err).Str("component", "api").Logger()
+		logger.Error().Msg("failed to encode delete response")
+	}
 }
 
 func (h *restAPIHandler) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
@@ -1165,8 +1180,11 @@ func convertNodeIDsToStrings(ids []raft.NodeID) []string {
 
 // setupDashboard serves the dashboard static files
 func setupDashboard(mux *http.ServeMux) {
-	// Get the embedded filesystem, stripping the "web/dashboard" prefix
-	fsys, err := fs.Sub(dashboardFS, "web/dashboard")
+	// Use embedded web dashboard from /web package
+	fsys := web.Dashboard
+
+	// Serve directly (no prefix to strip since embed.go is in web/ dir)
+	_, err := fs.Stat(fsys, "index.html")
 	if err != nil {
 		logger := logging.With().Err(err).Str("component", "api").Logger()
 		logger.Error().Msg("failed to setup dashboard filesystem")
